@@ -45,6 +45,8 @@ use App\Controllers\Admin\AdminExportController;
 use App\Controllers\Admin\FeatureFlagController;
 use App\Controllers\SearchController;
 use App\Controllers\User\TicketController         as UserTicketController;
+use App\Controllers\Admin\RiskPolicyController;
+use App\Controllers\Admin\ScoreManagementController;
 
 $admin = [AuthMiddleware::class, AdminMiddleware::class];
 $r     = app()->router;
@@ -340,3 +342,13 @@ $r->get('/admin/export/audit-trail',  [AdminExportController::class, 'auditTrail
 
 // ── جستجو ─────────────────────────────────────────────────────────────────────
 $r->get('/admin/search', [SearchController::class, 'adminSearch'], $admin);
+
+// Risk policies
+$r->get('/admin/risk-policies',              [RiskPolicyController::class, 'index'], $admin);
+$r->post('/admin/risk-policies/update',      [RiskPolicyController::class, 'update'], $admin);
+
+// User score management
+$r->get('/admin/users/{id}/scores',                 [ScoreManagementController::class, 'showUserScores'], $admin);
+$r->post('/admin/users/{id}/scores/adjust',         [ScoreManagementController::class, 'adjustScore'], $admin);
+$r->post('/admin/scores/adjustments/{id}/revoke',   [ScoreManagementController::class, 'revokeAdjustment'], $admin);
+$r->get('/admin/users/{id}/scores/history',         [ScoreManagementController::class, 'history'], $admin);
