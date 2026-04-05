@@ -6,8 +6,6 @@ namespace App\Services;
 use App\Models\Advertisement;
 use App\Models\TaskExecution;
 use App\Models\SocialAccount;
-use App\Models\User;
-use App\Models\Wallet;
 use App\Services\WalletService;
 use Core\Database;
 
@@ -21,13 +19,21 @@ class TaskExecutionService
     private TaskExecution $taskExecutionModel;
     private SocialAccount $socialAccountModel;
 
-    public function __construct(Database $db, 
+    // Risk bridge dependencies (optional for backward compatibility)
+    private $riskPolicyService = null;
+    private $userScoreService = null;
+
+    public function __construct(
+        Database $db,
         WalletService $walletService,
         \App\Models\Advertisement $advertisementModel,
         \App\Models\TaskExecution $taskExecutionModel,
         \App\Models\SocialAccount $socialAccountModel,
         \App\Models\Notification $notificationModel,
-        \App\Services\ReferralCommissionService $referralCommissionService){
+        \App\Services\ReferralCommissionService $referralCommissionService,
+        $riskPolicyService = null,
+        $userScoreService = null
+    ) {
         $this->db = $db;
         $this->walletService = $walletService;
         $this->advertisementModel = $advertisementModel;
@@ -35,6 +41,25 @@ class TaskExecutionService
         $this->socialAccountModel = $socialAccountModel;
         $this->notificationModel = $notificationModel;
         $this->referralCommissionService = $referralCommissionService;
+
+        // Resolve risk services if available (without breaking old container wiring)
+        $this->riskPolicyService = $riskPolicyService;
+        $this->userScoreService = $userScoreService;
+
+        if ($this->riskPolicyService === null || $this->userScoreService === null) {
+            try {
+                $container = \Core\Container::getInstance();
+
+                if ($this->riskPolicyService === null && \class_exists(\App\Services\RiskPolicyService::class)) {
+                    $this->riskPolicyService = $container->make(\App\Services\RiskPolicyService::class);
+                }
+                if ($this->userScoreService === null && \class_exists(\App\Services\UserScoreService::class)) {
+                    $this->userScoreService = $container->make(\App\Services\UserScoreService::class);
+                }
+            } catch (\Throwable $e) {
+                // Keep null for backward compatibility
+            }
+        }
     }
 
     /**
@@ -98,7 +123,7 @@ class TaskExecutionService
             return ['success' => false, 'message' => 'در حال حاضر امکان انجام تسک وجود ندارد. لطفاً بعداً تلاش کنید.'];
         }
 
-        // محاسبه deadline (2 دقیقه برای تسک‌های ساده)
+        // محاسبه deadline
         $deadlineMinutes = $this->getDeadlineMinutes($ad->task_type);
         $deadlineAt = \date('Y-m-d H:i:s', \strtotime("+{$deadlineMinutes} minutes"));
 
@@ -120,10 +145,10 @@ class TaskExecutionService
         logger('task_execution', "User {$executorId} started task for ad #{$adId}");
 
         return [
-            'success'   => true,
-            'message'   => 'تسک شروع شد. لطفاً قبل از اتمام زمان، کار را انجام و مدرک ارسال کنید.',
-            'execution' => $execution,
-            'deadline'  => $deadlineAt,
+            'success'    => true,
+            'message'    => 'تسک شروع شد. لطفاً قبل از اتمام زمان، کار را انجام و مدرک ارسال کنید.',
+            'execution'  => $execution,
+            'deadline'   => $deadlineAt,
             'target_url' => $ad->target_url,
         ];
     }
@@ -152,11 +177,20 @@ class TaskExecutionService
         $startedAt = \strtotime($execution->started_at);
         $elapsed = \time() - $startedAt;
         if ($elapsed < 15) {
-            // کمتر از 15 ثانیه → مشکوک
+            $newFraudScore = (float)($execution->fraud_score ?? 0) + 30;
+
             $this->taskExecutionModel->update($executionId, [
-                'fraud_score' => $execution->fraud_score + 30,
+                'fraud_score' => $newFraudScore,
                 'behavior_data' => \json_encode(['too_fast' => true, 'elapsed' => $elapsed]),
             ]);
+
+            $this->applyTaskRiskBridge(
+                (int)$executorId,
+                (int)$executionId,
+                $newFraudScore,
+                ['reason' => 'too_fast_submission', 'elapsed' => $elapsed]
+            );
+
             return ['success' => false, 'message' => 'سرعت انجام کار غیرطبیعی است. لطفاً تسک را با دقت انجام دهید.'];
         }
 
@@ -168,9 +202,19 @@ class TaskExecutionService
         // بررسی تصویر تکراری (Hash)
         $duplicateCheck = $this->checkDuplicateProof($data['proof_image'], $executorId);
         if ($duplicateCheck['is_duplicate']) {
+            $newFraudScore = (float)($execution->fraud_score ?? 0) + 50;
+
             $this->taskExecutionModel->update($executionId, [
-                'fraud_score' => $execution->fraud_score + 50,
+                'fraud_score' => $newFraudScore,
             ]);
+
+            $this->applyTaskRiskBridge(
+                (int)$executorId,
+                (int)$executionId,
+                $newFraudScore,
+                ['reason' => 'duplicate_proof']
+            );
+
             return ['success' => false, 'message' => 'این تصویر قبلاً ارسال شده است. لطفاً اسکرین‌شات جدید بگیرید.'];
         }
 
@@ -192,8 +236,12 @@ class TaskExecutionService
         // نوتیفیکیشن به تبلیغ‌دهنده
         $ad = $this->advertisementModel->find($execution->advertisement_id);
         if ($ad) {
-            $this->notifyUser($ad->advertiser_id, 'مدرک تسک جدید',
-                "مدرک انجام تسک «{$ad->title}» ارسال شد. لطفاً بررسی کنید.", 'info');
+            $this->notifyUser(
+                $ad->advertiser_id,
+                'مدرک تسک جدید',
+                "مدرک انجام تسک «{$ad->title}» ارسال شد. لطفاً بررسی کنید.",
+                'info'
+            );
         }
 
         return [
@@ -283,6 +331,14 @@ class TaskExecutionService
                 'paid_at'     => \date('Y-m-d H:i:s'),
             ]);
 
+            // Bridge task risk -> fraud (policy-driven)
+            $this->applyTaskRiskBridge(
+                (int)$execution->executor_id,
+                (int)$execution->id,
+                (float)($execution->fraud_score ?? 0),
+                ['reason' => 'execution_approved', 'reviewer_type' => $reviewerType]
+            );
+
             // پرداخت کمیسیون معرف
             $this->payReferralCommission($execution);
 
@@ -293,13 +349,14 @@ class TaskExecutionService
 
             logger('task_execution', "Execution #{$execution->id} approved by {$reviewerType} #{$reviewerId} | Reward: {$execution->reward_amount} {$execution->reward_currency}");
 
-            // نوتیفیکیشن
-            $this->notifyUser($execution->executor_id, 'تسک تایید شد',
+            $this->notifyUser(
+                $execution->executor_id,
+                'تسک تایید شد',
                 "تسک «{$ad->title}» تایید شد و " . \number_format($execution->reward_amount) . " به کیف پول شما اضافه شد.",
-                'success');
+                'success'
+            );
 
             return ['success' => true, 'message' => 'تسک با موفقیت تایید شد.'];
-
         } catch (\Throwable $e) {
             $this->db->rollBack();
             logger('task_execution_error', $e->getMessage());
@@ -336,9 +393,12 @@ class TaskExecutionService
 
         logger('task_execution', "Advertiser {$advertiserId} rejected execution #{$executionId}: {$reason}");
 
-        $this->notifyUser($execution->executor_id, 'تسک رد شد',
+        $this->notifyUser(
+            $execution->executor_id,
+            'تسک رد شد',
             "تسک «{$ad->title}» رد شد. دلیل: {$reason}\nدر صورت اعتراض می‌توانید تیکت ثبت کنید.",
-            'danger');
+            'danger'
+        );
 
         return ['success' => true, 'message' => 'تسک رد شد و به انجام‌دهنده اطلاع داده شد.'];
     }
@@ -363,7 +423,6 @@ class TaskExecutionService
             'reviewed_at'      => \date('Y-m-d H:i:s'),
         ]);
 
-        // بازگشت ظرفیت تبلیغ
         if ($ad) {
             $this->advertisementModel->incrementRemaining($ad->id, $ad->price_per_task);
         }
@@ -372,8 +431,12 @@ class TaskExecutionService
 
         if ($execution->executor_id) {
             $adTitle = $ad ? $ad->title : 'نامشخص';
-            $this->notifyUser($execution->executor_id, 'تسک رد شد',
-                "تسک «{$adTitle}» توسط مدیریت رد شد. دلیل: {$reason}", 'danger');
+            $this->notifyUser(
+                $execution->executor_id,
+                'تسک رد شد',
+                "تسک «{$adTitle}» توسط مدیریت رد شد. دلیل: {$reason}",
+                'danger'
+            );
         }
 
         return ['success' => true, 'message' => 'تسک رد شد.'];
@@ -407,7 +470,6 @@ class TaskExecutionService
     {
         $restrictions = $ad->getRestrictions();
 
-        // بررسی حداقل فالوور
         if (isset($restrictions->min_follower) && $restrictions->min_follower > 0) {
             $socialAccount = $this->socialAccountModel->findByUserAndPlatform($executorId, $ad->platform);
             if (!$socialAccount || $socialAccount->follower_count < $restrictions->min_follower) {
@@ -418,7 +480,6 @@ class TaskExecutionService
             }
         }
 
-        // بررسی حداقل سن حساب
         if (isset($restrictions->min_account_age_months) && $restrictions->min_account_age_months > 0) {
             $socialAccount = $this->socialAccountModel->findByUserAndPlatform($executorId, $ad->platform);
             if (!$socialAccount || $socialAccount->account_age_months < $restrictions->min_account_age_months) {
@@ -453,26 +514,106 @@ class TaskExecutionService
         ");
         $stmt->execute([$executorId, '%' . $imageHash . '%']);
 
-        return ['is_duplicate' => (int) $stmt->fetchColumn() > 0];
+        return ['is_duplicate' => (int)$stmt->fetchColumn() > 0];
     }
 
     /**
-     * بررسی Silent Blacklist
+     * بررسی Silent Blacklist (policy-driven when available)
      */
     private function isBlacklisted(int $userId): bool
     {
         try {
-            $stmt = $this->db->prepare("
-                SELECT fraud_score FROM users WHERE id = ?
-            ");
+            $stmt = $this->db->prepare("SELECT fraud_score FROM users WHERE id = ?");
             $stmt->execute([$userId]);
-            $score = (float) $stmt->fetchColumn();
+            $score = (float)$stmt->fetchColumn();
 
-            // اگر امتیاز تقلب بالای 80 باشد
-            return $score >= 80;
+            $threshold = 80;
+            if ($this->riskPolicyService && \method_exists($this->riskPolicyService, 'getInt')) {
+                $threshold = (int)$this->riskPolicyService->getInt('fraud', 'block_threshold', 80);
+            }
+
+            return $score >= $threshold;
         } catch (\Throwable $e) {
             return false;
         }
+    }
+
+    /**
+     * Bridge task-level risk to global fraud score as event.
+     * این متد اسکورها را ادغام نمی‌کند، فقط سیگنال مشکوک را به Fraud می‌فرستد.
+     */
+    private function applyTaskRiskBridge(
+        int $userId,
+        int $executionId,
+        float $taskFraudScore,
+        array $meta = []
+    ): void {
+        if (!$this->isTaskRiskBridgeEnabled()) {
+            return;
+        }
+
+        if (!$this->userScoreService || !\method_exists($this->userScoreService, 'applyEventDelta')) {
+            return;
+        }
+
+        $delta = $this->calculateFraudDeltaFromTaskScore($taskFraudScore);
+        if ($delta === 0) {
+            return;
+        }
+
+        $eventMeta = \array_merge([
+            'task_execution_id' => $executionId,
+            'task_fraud_score'  => $taskFraudScore,
+            'source'            => 'task_execution',
+        ], $meta);
+
+        $this->userScoreService->applyEventDelta(
+            $userId,
+            'fraud',
+            $delta,
+            'task_execution',
+            $eventMeta
+        );
+    }
+
+    /**
+     * تبدیل task fraud score به delta سراسری fraud با policy
+     */
+    private function calculateFraudDeltaFromTaskScore(float $taskFraudScore): int
+    {
+        $highThreshold = 70;
+        $mediumThreshold = 40;
+        $highDelta = 8;
+        $mediumDelta = 3;
+
+        if ($this->riskPolicyService && \method_exists($this->riskPolicyService, 'getInt')) {
+            $highThreshold = (int)$this->riskPolicyService->getInt('task', 'high_risk_threshold', 70);
+            $mediumThreshold = (int)$this->riskPolicyService->getInt('task', 'medium_risk_threshold', 40);
+            $highDelta = (int)$this->riskPolicyService->getInt('task', 'high_risk_delta', 8);
+            $mediumDelta = (int)$this->riskPolicyService->getInt('task', 'medium_risk_delta', 3);
+        }
+
+        if ($taskFraudScore >= $highThreshold) {
+            return $highDelta;
+        }
+
+        if ($taskFraudScore >= $mediumThreshold) {
+            return $mediumDelta;
+        }
+
+        return 0;
+    }
+
+    /**
+     * روشن/خاموش شدن پل task->fraud از پنل تنظیمات
+     */
+    private function isTaskRiskBridgeEnabled(): bool
+    {
+        if ($this->riskPolicyService && \method_exists($this->riskPolicyService, 'getBool')) {
+            return (bool)$this->riskPolicyService->getBool('task', 'risk_to_fraud_bridge_enabled', true);
+        }
+
+        return true;
     }
 
     /**
@@ -521,7 +662,7 @@ class TaskExecutionService
     {
         try {
             if (\class_exists(\App\Models\Notification::class)) {
-                ($this->notificationModel)->create([
+                $this->notificationModel->create([
                     'user_id' => $userId,
                     'title'   => $title,
                     'message' => $message,
