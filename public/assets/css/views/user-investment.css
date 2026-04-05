@@ -1,0 +1,13 @@
+/* user-investment.css - Generated from inline styles */
+
+.risk-warning-box {
+    background: #fff8e1;
+    border: 2px solid #ffa726;
+    border-radius: 8px;
+    padding: 20px;
+    font-size: 14px;
+    line-height: 2;
+    color: #5d4037;
+    max-height: 300px;
+    overflow-y: auto;
+}

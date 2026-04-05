@@ -1,0 +1,19 @@
+# robots.txt for Chortke
+
+User-agent: *
+
+# Allow
+Allow: /
+Allow: /pages/
+Allow: /assets/
+
+# Disallow
+Disallow: /admin/
+Disallow: /user/
+Disallow: /storage/
+Disallow: /config/
+Disallow: /database/
+Disallow: /vendor/
+
+# Sitemap
+Sitemap: https://chortke.com/sitemap.xml
