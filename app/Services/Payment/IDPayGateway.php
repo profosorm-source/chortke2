@@ -3,19 +3,21 @@
 namespace App\Services\Payment;
 
 use App\Models\PaymentGateway;
+use Core\Logger;
 
 class IDPayGateway implements PaymentGatewayInterface
 {
     private \App\Models\PaymentGateway $paymentGatewayModel;
     private ?object $config;
+    private Logger  $logger;
 
     public function __construct(
-        \App\Models\PaymentGateway $paymentGatewayModel
-    )
-    {
-        $model = $this->paymentGatewayModel;
-        $this->config = $model->getActiveGateway('idpay');
+        \App\Models\PaymentGateway $paymentGatewayModel,
+        ?Logger                   $logger = null
+    ) {
         $this->paymentGatewayModel = $paymentGatewayModel;
+        $this->config = $paymentGatewayModel->getActiveGateway('idpay');
+        $this->logger = $logger ?? Logger::getInstance();
     }
 
     public function request(int $amount, string $description, string $callback): array
@@ -72,7 +74,7 @@ class IDPayGateway implements PaymentGatewayInterface
             ];
 
         } catch (\Exception $e) {
-            logger()->error('IDPay request failed', ['error' => $e->getMessage()]);
+            $this->logger->error('payment.idpay.request_failed', ['error' => $e->getMessage()]);
             return [
                 'success' => false,
                 'message' => 'خطا در برقراری ارتباط با درگاه'
@@ -131,7 +133,7 @@ class IDPayGateway implements PaymentGatewayInterface
             ];
 
         } catch (\Exception $e) {
-            logger()->error('IDPay verify failed', ['error' => $e->getMessage()]);
+            $this->logger->error('payment.idpay.verify_failed', ['error' => $e->getMessage()]);
             return [
                 'success' => false,
                 'message' => 'خطا در تأیید پرداخت'

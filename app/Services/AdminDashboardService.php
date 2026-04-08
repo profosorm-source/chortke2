@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use Core\Database;
+use Core\Logger;
 
 /**
  * AdminDashboardService
@@ -15,10 +16,12 @@ use Core\Database;
 class AdminDashboardService
 {
     private Database $db;
+    private Logger   $logger;
 
-    public function __construct(Database $db)
+    public function __construct(Database $db, Logger $logger)
     {
-        $this->db = $db;
+        $this->db     = $db;
+        $this->logger = $logger;
     }
 
     // ══════════════════════════════════════════════════════════
@@ -188,7 +191,7 @@ class AdminDashboardService
                 ];
             }, $logs);
         } catch (\Throwable $e) {
-            logger()->error('Failed to get admin access log', ['error' => $e->getMessage()]);
+            $this->logger->error('admin.access_log.failed', ['error' => $e->getMessage()]);
             return [];
         }
     }
@@ -719,7 +722,7 @@ class AdminDashboardService
                 WHERE status = 'sent' AND sent_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
             ")->fetch();
         } catch (\Throwable $e) {
-            logger()->error('Email queue stats failed', ['error' => $e->getMessage()]);
+            $this->logger->error('admin.email_queue_stats.failed', ['error' => $e->getMessage()]);
             return [
                 'queued' => 0, 'sent_today' => 0, 'failed_today' => 0,
                 'stuck' => 0, 'processing' => 0, 'recent_failed' => [],

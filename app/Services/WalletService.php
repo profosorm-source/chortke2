@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Wallet;
 use App\Models\Transaction;
 use Core\Database;
+use Core\Logger;
 
 class WalletService
 {
@@ -17,19 +18,22 @@ class WalletService
     private Transaction $transactionModel;
     private Database    $db;
     private AuditTrail  $audit;
+    private Logger      $logger;
 
     public function __construct(
         Database             $db,
         \App\Models\Wallet      $walletModel,
         \App\Models\Transaction $transactionModel,
         \Core\IdempotencyKey    $idempotencyKey,
-        AuditTrail           $audit
+        AuditTrail           $audit,
+        Logger               $logger
     ) {
         $this->db               = $db;
         $this->walletModel      = $walletModel;
         $this->transactionModel = $transactionModel;
         $this->idempotencyKey   = $idempotencyKey;
         $this->audit            = $audit;
+        $this->logger           = $logger;
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -163,7 +167,7 @@ class WalletService
         } catch (\Exception $e) {
             $this->db->rollBack();
             $idempotencyService->fail($idempotencyKey, ['error' => $e->getMessage(), 'type' => 'runtime_error'], $userId);
-            logger()->error('Deposit failed', ['user_id' => $userId, 'amount' => $amount, 'error' => $e->getMessage()]);
+            $this->logger->error('wallet.credit.failed', ['user_id' => $userId, 'amount' => $amount, 'error' => $e->getMessage()]);
             throw $e;
         }
     }
@@ -289,7 +293,7 @@ class WalletService
         } catch (\Exception $e) {
             $this->db->rollBack();
             $idempotencyService->fail($idempotencyKey, ['error' => $e->getMessage(), 'type' => 'runtime_error'], $userId);
-            logger()->error('Withdraw failed', ['user_id' => $userId, 'amount' => $amount, 'error' => $e->getMessage()]);
+            $this->logger->error('wallet.debit.failed', ['user_id' => $userId, 'amount' => $amount, 'error' => $e->getMessage()]);
             throw $e;
         }
     }
@@ -458,7 +462,7 @@ class WalletService
 
         } catch (\Exception $e) {
             $this->db->rollBack();
-            logger()->error('Transfer failed', [
+            $this->logger->error('wallet.transfer.failed', [
                 'from_user_id' => $fromUserId,
                 'to_user_id'   => $toUserId,
                 'amount'       => $amount,
@@ -483,7 +487,7 @@ class WalletService
             $affected = $this->transactionModel->updateStatusByIdempotencyKey($idempotencyKey, $newStatus);
             return $affected > 0;
         } catch (\Exception $e) {
-            logger()->error('updateLedgerStatusByIdempotency failed', [
+            $this->logger->error('wallet.ledger.update_failed', [
                 'idempotency_key' => $idempotencyKey,
                 'new_status'      => $newStatus,
                 'error'           => $e->getMessage(),

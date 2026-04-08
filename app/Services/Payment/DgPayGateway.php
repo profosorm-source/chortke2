@@ -3,19 +3,21 @@
 namespace App\Services\Payment;
 
 use App\Models\PaymentGateway;
+use Core\Logger;
 
 class DgPayGateway implements PaymentGatewayInterface
 {
     private \App\Models\PaymentGateway $paymentGatewayModel;
     private ?object $config;
+    private Logger  $logger;
 
     public function __construct(
-        \App\Models\PaymentGateway $paymentGatewayModel
-    )
-    {
-        $model = $this->paymentGatewayModel;
-        $this->config = $model->getActiveGateway('dgpay');
+        \App\Models\PaymentGateway $paymentGatewayModel,
+        ?Logger                   $logger = null
+    ) {
         $this->paymentGatewayModel = $paymentGatewayModel;
+        $this->config = $paymentGatewayModel->getActiveGateway('dgpay');
+        $this->logger = $logger ?? Logger::getInstance();
     }
 
     public function request(int $amount, string $description, string $callback): array
@@ -71,7 +73,7 @@ class DgPayGateway implements PaymentGatewayInterface
             ];
 
         } catch (\Exception $e) {
-            logger()->error('DgPay request failed', ['error' => $e->getMessage()]);
+            $this->logger->error('payment.dgpay.request_failed', ['error' => $e->getMessage()]);
             return [
                 'success' => false,
                 'message' => 'خطا در برقراری ارتباط با درگاه'
@@ -128,7 +130,7 @@ class DgPayGateway implements PaymentGatewayInterface
             ];
 
         } catch (\Exception $e) {
-            logger()->error('DgPay verify failed', ['error' => $e->getMessage()]);
+            $this->logger->error('payment.dgpay.verify_failed', ['error' => $e->getMessage()]);
             return [
                 'success' => false,
                 'message' => 'خطا در تأیید پرداخت'

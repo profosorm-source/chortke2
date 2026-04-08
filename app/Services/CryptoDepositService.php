@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use Core\Database;
+use Core\Logger;
 use App\Models\CryptoDepositIntent;
 use App\Models\CryptoDeposit;
 
@@ -15,14 +16,18 @@ class CryptoDepositService
     private CryptoDeposit $depositModel;
     private NotificationService $notifier;
     private WalletService $wallet;
+    private Logger $logger;
 
-    public function __construct(Database $db, 
+    public function __construct(
+        Database $db, 
         WalletService $walletService,
         NotificationService $notificationService,
         \App\Models\CryptoDepositIntent $intentModel,
         \App\Models\CryptoDeposit $depositModel,
         \App\Models\CryptoDeposit $cryptoDepositModel,
-        \App\Models\CryptoDepositIntent $cryptoDepositIntentModel){
+        \App\Models\CryptoDepositIntent $cryptoDepositIntentModel,
+        Logger $logger
+    ) {
         $this->db = $db;
         $this->intentModel = $intentModel;
         $this->depositModel = $depositModel;
@@ -30,15 +35,26 @@ class CryptoDepositService
         $this->wallet = $walletService;
         $this->cryptoDepositModel = $cryptoDepositModel;
         $this->cryptoDepositIntentModel = $cryptoDepositIntentModel;
+        $this->logger = $logger->withChannel('crypto');
     }
 
 
      public function createIntent(int $userId, string $network, float $requestedAmount): array
     {
+        $this->logger->info('crypto.intent.create.started', [
+            'user_id' => $userId,
+            'network' => $network,
+            'requested_amount' => $requestedAmount
+        ]);
+        
         $expireMinutes = (int) setting('crypto_intent_expire_minutes', 30);
 
         $open = $this->intentModel->getOpenIntentForUser($userId);
         if ($open) {
+            $this->logger->info('crypto.intent.existing', [
+                'user_id' => $userId,
+                'intent_id' => $open->id ?? null
+            ]);
             return [
                 'success' => true,
                 'message' => 'شما یک درخواست فعال دارید',
@@ -48,24 +64,47 @@ class CryptoDepositService
 
         $toWallet = $this->getSiteWallet($network);
         if (!$toWallet) {
+            $this->logger->error('crypto.intent.no_wallet', [
+                'user_id' => $userId,
+                'network' => $network
+            ]);
             return ['success' => false, 'message' => 'ولت این شبکه تنظیم نشده است'];
         }
 
         $expected = $this->generateUniqueAmount($network, $requestedAmount);
         $expiresAt = \date('Y-m-d H:i:s', \time() + ($expireMinutes * 60));
 
-        $id = ($this->cryptoDepositIntentModel)->create([
+        try {
+            $id = ($this->cryptoDepositIntentModel)->create([
+                'user_id' => $userId,
+                'network' => $network,
+                'requested_amount' => $requestedAmount,
+                'expected_amount' => $expected,
+                'to_wallet' => $toWallet,
+                'expires_at' => $expiresAt,
+                'status' => 'open',
+                'ip_address' => get_client_ip(),
+                'user_agent' => get_user_agent(),
+                'created_at' => \date('Y-m-d H:i:s'),
+                'updated_at' => \date('Y-m-d H:i:s'),
+            ]);
+        } catch (\Exception $e) {
+            log_error_advanced(
+                'خطا در ساخت Intent واریز کریپتو',
+                'CRITICAL',
+                $e,
+                ['user_id' => $userId, 'network' => $network, 'amount' => $requestedAmount]
+            );
+            return ['success' => false, 'message' => 'خطای سیستمی در ساخت درخواست'];
+        }
+
+        $this->logger->info('crypto.intent.created', [
             'user_id' => $userId,
+            'intent_id' => $id,
             'network' => $network,
             'requested_amount' => $requestedAmount,
             'expected_amount' => $expected,
-            'to_wallet' => $toWallet,
-            'expires_at' => $expiresAt,
-            'status' => 'open',
-            'ip_address' => get_client_ip(),
-            'user_agent' => get_user_agent(),
-            'created_at' => \date('Y-m-d H:i:s'),
-            'updated_at' => \date('Y-m-d H:i:s'),
+            'expires_at' => $expiresAt
         ]);
 
         return [
@@ -85,50 +124,92 @@ class CryptoDepositService
         $txHash = \trim($txHash);
         $fromWallet = \trim($fromWallet);
 
+        $this->logger->info('crypto.tx.submit.started', [
+            'user_id' => $userId,
+            'intent_id' => $intentId,
+            'tx_hash' => $txHash,
+            'from_wallet' => $fromWallet
+        ]);
+
         // intent را مستقیم از DB بگیریم (بدون chainهای نامطمئن)
         $stmt = $this->db->prepare("SELECT * FROM crypto_deposit_intents WHERE id=:id AND user_id=:uid LIMIT 1");
         $stmt->execute(['id' => $intentId, 'uid' => $userId]);
         $intent = $stmt->fetch(\PDO::FETCH_OBJ);
 
         if (!$intent || (string)$intent->status !== 'open') {
+            $this->logger->error('crypto.tx.submit.invalid_intent', [
+                'user_id' => $userId,
+                'intent_id' => $intentId,
+                'intent_status' => $intent->status ?? 'not_found'
+            ]);
             return ['success' => false, 'message' => 'Intent نامعتبر است'];
         }
 
         if (\strtotime((string)$intent->expires_at) < \time()) {
             $this->intentModel->expireIfPassed((int)$intent->id);
+            $this->logger->warning('crypto.tx.submit.expired', [
+                'user_id' => $userId,
+                'intent_id' => $intentId,
+                'expires_at' => $intent->expires_at
+            ]);
             return ['success' => false, 'message' => 'مهلت Intent تمام شده است. Intent جدید بسازید'];
         }
 
         $dup = $this->depositModel->findByHash($txHash);
         if ($dup) {
+            $this->logger->warning('crypto.tx.submit.duplicate', [
+                'user_id' => $userId,
+                'intent_id' => $intentId,
+                'tx_hash' => $txHash,
+                'existing_deposit_id' => $dup->id ?? null
+            ]);
             return ['success' => false, 'message' => 'این هش قبلاً ثبت شده است'];
         }
 
         $slaHours = (int) setting('crypto_manual_review_sla_hours', 6);
         $manualDeadline = \date('Y-m-d H:i:s', \time() + ($slaHours * 3600));
 
-        $depositId = ($this->cryptoDepositModel)->create([
-            'user_id' => $userId,
-            'intent_id' => (int)$intent->id,
-            'network' => (string)$intent->network,
-            'amount' => (float)$intent->expected_amount,
-            'tx_hash' => $txHash,
-            'from_wallet' => $fromWallet,
-            'to_wallet' => (string)$intent->to_wallet,
-            'user_submitted_at' => \date('Y-m-d H:i:s'),
-            'auto_check_deadline' => (string)$intent->expires_at,
-            'manual_review_deadline' => $manualDeadline,
-            'verification_status' => 'pending',
-            'explorer_url' => $this->buildExplorerUrl((string)$intent->network, $txHash),
-            'ip_address' => get_client_ip(),
-            'user_agent' => get_user_agent(),
-            'created_at' => \date('Y-m-d H:i:s'),
-            'updated_at' => \date('Y-m-d H:i:s'),
-        ]);
+        try {
+            $depositId = ($this->cryptoDepositModel)->create([
+                'user_id' => $userId,
+                'intent_id' => (int)$intent->id,
+                'network' => (string)$intent->network,
+                'amount' => (float)$intent->expected_amount,
+                'tx_hash' => $txHash,
+                'from_wallet' => $fromWallet,
+                'to_wallet' => (string)$intent->to_wallet,
+                'user_submitted_at' => \date('Y-m-d H:i:s'),
+                'auto_check_deadline' => (string)$intent->expires_at,
+                'manual_review_deadline' => $manualDeadline,
+                'verification_status' => 'pending',
+                'explorer_url' => $this->buildExplorerUrl((string)$intent->network, $txHash),
+                'ip_address' => get_client_ip(),
+                'user_agent' => get_user_agent(),
+                'created_at' => \date('Y-m-d H:i:s'),
+                'updated_at' => \date('Y-m-d H:i:s'),
+            ]);
+        } catch (\Exception $e) {
+            log_error_advanced(
+                'خطا در ساخت Deposit کریپتو',
+                'CRITICAL',
+                $e,
+                ['user_id' => $userId, 'intent_id' => $intentId, 'tx_hash' => $txHash]
+            );
+            return ['success' => false, 'message' => 'خطای سیستمی در ثبت واریز'];
+        }
 
         // intent -> claimed
         $stmt2 = $this->db->prepare("UPDATE crypto_deposit_intents SET status='claimed', claimed_at=NOW(), updated_at=NOW() WHERE id=:id");
         $stmt2->execute(['id' => (int)$intent->id]);
+
+        $this->logger->info('crypto.tx.submit.success', [
+            'user_id' => $userId,
+            'intent_id' => $intentId,
+            'deposit_id' => $depositId,
+            'network' => $intent->network,
+            'amount' => $intent->expected_amount,
+            'tx_hash' => $txHash
+        ]);
 
         // فعلاً best-effort: مستقیم manual review (تا verifier کامل شود)
         return [
@@ -143,7 +224,20 @@ class CryptoDepositService
     public function tryAutoVerify(int $depositId): array
     {
         $d = $this->depositModel->find($depositId);
-        if (!$d) return ['auto' => false, 'message' => 'واریز یافت نشد'];
+        if (!$d) {
+            $this->logger->error('crypto.verify.deposit_not_found', [
+                'deposit_id' => $depositId
+            ]);
+            return ['auto' => false, 'message' => 'واریز یافت نشد'];
+        }
+
+        $this->logger->info('crypto.verify.started', [
+            'deposit_id' => $depositId,
+            'user_id' => $d->user_id,
+            'network' => $d->network,
+            'amount' => $d->amount,
+            'tx_hash' => $d->tx_hash
+        ]);
 
         // فقط داخل پنجره 30 دقیقه
         if ($d->auto_check_deadline && strtotime((string)$d->auto_check_deadline) < time()) {
@@ -155,6 +249,13 @@ class CryptoDepositService
                     'risk_score' => 20,
                     'reviewed_at' => date('Y-m-d H:i:s'),
                 ]);
+                
+                $this->logger->warning('crypto.verify.timeout', [
+                    'deposit_id' => $depositId,
+                    'user_id' => $d->user_id,
+                    'deadline' => $d->auto_check_deadline
+                ]);
+                
                 return ['auto' => false, 'message' => 'رد شد (پایان مهلت ۳۰ دقیقه)'];
             }
         }
@@ -164,19 +265,44 @@ class CryptoDepositService
             'auto_check_attempts' => (int)$d->auto_check_attempts + 1
         ]);
 
-        $verifier = new CryptoExplorerBestEffortVerifier();
-        $result = $verifier->verify((string)$d->network, (string)$d->tx_hash, (string)$d->from_wallet, (string)$d->to_wallet, (float)$d->amount);
+        try {
+            $verifier = new CryptoExplorerBestEffortVerifier();
+            $result = $verifier->verify((string)$d->network, (string)$d->tx_hash, (string)$d->from_wallet, (string)$d->to_wallet, (float)$d->amount);
+        } catch (\Exception $e) {
+            log_error_advanced(
+                'خطا در تأیید خودکار تراکنش کریپتو',
+                'ERROR',
+                $e,
+                ['deposit_id' => $depositId, 'user_id' => $d->user_id, 'tx_hash' => $d->tx_hash]
+            );
+            return $this->moveToManualReview($depositId, 'خطا در اتصال به Explorer');
+        }
 
         if (($result['status'] ?? '') === 'verified') {
-            $ok = $this->wallet->deposit((int)$d->user_id, 'USDT', (float)$d->amount, 'deposit', [
-                'type' => 'crypto_deposit',
-                'deposit_id' => $depositId,
-                'network' => (string)$d->network,
-                'tx_hash' => (string)$d->tx_hash,
-                'description' => 'واریز تتر (تأیید خودکار)'
-            ]);
+            try {
+                $ok = $this->wallet->deposit((int)$d->user_id, 'USDT', (float)$d->amount, 'deposit', [
+                    'type' => 'crypto_deposit',
+                    'deposit_id' => $depositId,
+                    'network' => (string)$d->network,
+                    'tx_hash' => (string)$d->tx_hash,
+                    'description' => 'واریز تتر (تأیید خودکار)'
+                ]);
+            } catch (\Exception $e) {
+                log_error_advanced(
+                    'خطا در شارژ کیف پول بعد از تأیید کریپتو',
+                    'CRITICAL',
+                    $e,
+                    ['deposit_id' => $depositId, 'user_id' => $d->user_id, 'amount' => $d->amount]
+                );
+                return $this->moveToManualReview($depositId, 'تأیید شد اما شارژ کیف پول با خطا مواجه شد');
+            }
 
             if (!$ok) {
+                $this->logger->error('crypto.verify.wallet_deposit_failed', [
+                    'deposit_id' => $depositId,
+                    'user_id' => $d->user_id,
+                    'amount' => $d->amount
+                ]);
                 return $this->moveToManualReview($depositId, 'تأیید شد اما شارژ کیف پول با خطا مواجه شد');
             }
 
@@ -185,6 +311,14 @@ class CryptoDepositService
                 'reviewed_at' => date('Y-m-d H:i:s'),
                 'mismatch_reason' => null,
                 'risk_score' => 0
+            ]);
+
+            $this->logger->info('crypto.verify.auto_success', [
+                'deposit_id' => $depositId,
+                'user_id' => $d->user_id,
+                'amount' => $d->amount,
+                'network' => $d->network,
+                'tx_hash' => $d->tx_hash
             ]);
 
             $this->notifier->depositSuccess((int)$d->user_id, (float)$d->amount, 'USDT');

@@ -5,12 +5,14 @@ namespace App\Services;
 use App\Models\Notification;
 use App\Models\NotificationPreference;
 use Core\Database;
+use Core\Logger;
 
 class NotificationService
 {
     private Database $db;
     private Notification $notificationModel;
     private NotificationPreference $prefModel;
+    private Logger $logger;
 
     /**
      * BUG FIX 1 & 2:
@@ -21,11 +23,13 @@ class NotificationService
     public function __construct(
         Notification $notificationModel,
         NotificationPreference $prefModel,
-        Database $db
+        Database $db,
+        Logger   $logger
     ) {
         $this->notificationModel = $notificationModel;
         $this->prefModel         = $prefModel;
         $this->db                = $db;
+        $this->logger            = $logger;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -63,7 +67,7 @@ class NotificationService
             }
         } catch (\Throwable $e) {
             // اگر جدول preference وجود نداشت، notification را می‌فرستیم
-            logger()->warning('NotificationPreference check failed: ' . $e->getMessage());
+            $this->logger->warning('notif.pref_check_failed' ' . $e->getMessage());
         }
 
         try {
@@ -82,7 +86,7 @@ class NotificationService
             return $notifId ?: null;
 
         } catch (\Throwable $e) {
-            logger()->error('NotificationService::send failed', [
+            $this->logger->error('notif.send_failed', [
                 'user_id' => $userId,
                 'type'    => $type,
                 'error'   => $e->getMessage(),
@@ -133,7 +137,7 @@ class NotificationService
             $ok ? $sent++ : $skipped++;
         }
 
-        logger()->info("sendToAll: sent={$sent} skipped={$skipped} type={$type}");
+        $this->logger->info('notif.send_to_all' sent={$sent} skipped={$skipped} type={$type}");
         return ['sent' => $sent, 'skipped' => $skipped];
     }
 

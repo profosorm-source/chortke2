@@ -3,19 +3,21 @@
 namespace App\Services\Payment;
 
 use App\Models\PaymentGateway;
+use Core\Logger;
 
 class NextPayGateway implements PaymentGatewayInterface
 {
     private \App\Models\PaymentGateway $paymentGatewayModel;
     private ?object $config;
+    private Logger  $logger;
 
     public function __construct(
-        \App\Models\PaymentGateway $paymentGatewayModel
-    )
-    {
-        $model = $this->paymentGatewayModel;
-        $this->config = $model->getActiveGateway('nextpay');
+        \App\Models\PaymentGateway $paymentGatewayModel,
+        ?Logger                   $logger = null
+    ) {
         $this->paymentGatewayModel = $paymentGatewayModel;
+        $this->config = $paymentGatewayModel->getActiveGateway('nextpay');
+        $this->logger = $logger ?? Logger::getInstance();
     }
 
     public function request(int $amount, string $description, string $callback): array
@@ -68,7 +70,7 @@ class NextPayGateway implements PaymentGatewayInterface
             ];
 
         } catch (\Exception $e) {
-            logger()->error('NextPay request failed', ['error' => $e->getMessage()]);
+            $this->logger->error('payment.nextpay.request_failed', ['error' => $e->getMessage()]);
             return [
                 'success' => false,
                 'message' => 'خطا در برقراری ارتباط با درگاه'
@@ -123,7 +125,7 @@ class NextPayGateway implements PaymentGatewayInterface
             ];
 
         } catch (\Exception $e) {
-            logger()->error('NextPay verify failed', ['error' => $e->getMessage()]);
+            $this->logger->error('payment.nextpay.verify_failed', ['error' => $e->getMessage()]);
             return [
                 'success' => false,
                 'message' => 'خطا در تأیید پرداخت'

@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use Core\Database;
+use Core\Logger;
 use App\Models\Setting;
 
 /**
@@ -22,6 +23,7 @@ class WithdrawalLimitService
 {
     private Database $db;
     private Setting $settings;
+    private Logger $logger;
 
     /** تعریف پروفایل‌های محدودیت */
     private const PROFILES = [
@@ -32,10 +34,14 @@ class WithdrawalLimitService
         'admin'         => ['daily'=>999,'weekly'=>9999,'monthly'=>99999,'multiplier'=>100.0],
     ];
 
-    public function __construct(Database $db,
-        \App\Models\Setting $settings){
+    public function __construct(
+        Database $db,
+        \App\Models\Setting $settings,
+        Logger $logger
+    ) {
         $this->db = $db;
         $this->settings = $settings;
+        $this->logger = $logger->withChannel('wallet');
     }
 
     /**
@@ -45,8 +51,17 @@ class WithdrawalLimitService
      */
     public function check(int $userId, float $amount, string $currency): array
     {
+        $this->logger->info('withdrawal.limit.check.started', [
+            'user_id' => $userId,
+            'amount' => $amount,
+            'currency' => $currency
+        ]);
+        
         $user    = $this->db->fetch("SELECT * FROM users WHERE id = ? LIMIT 1", [$userId]);
         if (!$user) {
+            $this->logger->error('withdrawal.limit.user_not_found', [
+                'user_id' => $userId
+            ]);
             return ['allowed' => false, 'reason' => 'کاربر یافت نشد', 'limits' => []];
         }
 
@@ -55,6 +70,11 @@ class WithdrawalLimitService
 
         // ── محدودیت تعداد ─────────────────────────────────────
         if ($limits['daily_count'] === 0) {
+            $this->logger->warning('withdrawal.limit.blocked.no_kyc', [
+                'user_id' => $userId,
+                'profile' => $profile,
+                'amount' => $amount
+            ]);
             return [
                 'allowed' => false,
                 'reason'  => 'برای برداشت باید ابتدا احراز هویت (KYC) را تکمیل کنید',
@@ -111,6 +131,16 @@ class WithdrawalLimitService
             ];
         }
 
+        $this->logger->info('withdrawal.limit.check.allowed', [
+            'user_id' => $userId,
+            'amount' => $amount,
+            'currency' => $currency,
+            'profile' => $profile,
+            'remaining_daily' => $limits['daily_count'] - $todayCount,
+            'remaining_weekly' => $limits['weekly_count'] - $weekCount,
+            'remaining_monthly' => $limits['monthly_count'] - $monthCount
+        ]);
+        
         return [
             'allowed'    => true,
             'reason'     => '',

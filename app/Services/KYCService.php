@@ -8,6 +8,7 @@ use App\Models\User;
 use App\Services\AuditTrail;
 use App\Services\UploadService;
 use Core\Database;
+use Core\Logger;
 
 class KYCService
 {
@@ -17,6 +18,7 @@ class KYCService
     private UploadService    $uploadService;
     private AuditTrail       $audit;
     private ?NotificationService $notificationService;
+    private Logger           $logger;
 
     public function __construct(
         KYCVerification      $kycModel,
@@ -24,6 +26,7 @@ class KYCService
         Database             $db,
         UploadService        $uploadService,
         AuditTrail           $audit,
+        Logger               $logger,
         ?NotificationService $notificationService = null
     ) {
         $this->kycModel            = $kycModel;
@@ -32,6 +35,7 @@ class KYCService
         $this->uploadService       = $uploadService;
         $this->audit               = $audit;
         $this->notificationService = $notificationService;
+        $this->logger              = $logger->withChannel('kyc');
     }
 
     /**
@@ -133,6 +137,14 @@ class KYCService
             }
         }
 
+        if ($suspicious) {
+            $this->logger->warning('kyc.image.suspicious', [
+                'image_path' => basename($imagePath),
+                'reasons' => $reasons,
+                'software' => $exif['Software'] ?? null
+            ]);
+        }
+
         return ['suspicious' => $suspicious, 'reasons' => $reasons];
     }
 
@@ -141,42 +153,83 @@ class KYCService
      */
     public function submitKYC(int $userId, array $data, array $file): array
     {
+        $this->logger->info('kyc.submit.started', [
+            'user_id' => $userId,
+            'has_national_code' => !empty($data['national_code']),
+            'has_birth_date' => !empty($data['birth_date'])
+        ]);
+        
         $canSubmit = $this->canSubmitKYC($userId);
         if (!$canSubmit['can']) {
+            $this->logger->warning('kyc.submit.blocked', [
+                'user_id' => $userId,
+                'reason' => $canSubmit['reason']
+            ]);
             return ['success' => false, 'message' => $canSubmit['reason']];
         }
 
         if (empty($file) || !isset($file['error']) || $file['error'] !== UPLOAD_ERR_OK) {
+            $this->logger->error('kyc.submit.failed', [
+                'user_id' => $userId,
+                'reason' => 'no_file_uploaded',
+                'file_error' => $file['error'] ?? 'unknown'
+            ]);
             return ['success' => false, 'message' => 'لطفاً تصویر احراز هویت را آپلود کنید'];
         }
 
-        $uploadResult = $this->uploadService->upload(
-            $file,
-            'kyc',
-            ['image/jpeg', 'image/png'],
-            5 * 1024 * 1024
-        );
+        try {
+            $uploadResult = $this->uploadService->upload(
+                $file,
+                'kyc',
+                ['image/jpeg', 'image/png'],
+                5 * 1024 * 1024
+            );
+        } catch (\Exception $e) {
+            $this->logger->error('kyc.upload.exception', [
+                'user_id' => $userId,
+                'exception' => get_class($e),
+                'message' => $e->getMessage()
+            ]);
+            return ['success' => false, 'message' => 'خطا در آپلود تصویر'];
+        }
 
         if (!$uploadResult['success']) {
+            $this->logger->error('kyc.upload.failed', [
+                'user_id' => $userId,
+                'upload_message' => $uploadResult['message'] ?? 'unknown'
+            ]);
             return $uploadResult;
         }
 
         $uploadPath     = $this->uploadService->getPath('kyc/' . $uploadResult['filename']);
         $photoshopCheck = $this->detectPhotoshop($uploadPath);
 
-        $kycId = $this->kycModel->create([
-            'user_id'            => $userId,
-            'verification_image' => $uploadResult['filename'],
-            'national_code'      => $data['national_code'] ?? null,
-            'birth_date'         => $data['birth_date']    ?? null,
-            'status'             => $photoshopCheck['suspicious'] ? 'under_review' : 'pending',
-            'ip_address'         => get_client_ip(),
-            'user_agent'         => get_user_agent(),
-            'device_fingerprint' => generate_device_fingerprint(),
-        ]);
+        try {
+            $kycId = $this->kycModel->create([
+                'user_id'            => $userId,
+                'verification_image' => $uploadResult['filename'],
+                'national_code'      => $data['national_code'] ?? null,
+                'birth_date'         => $data['birth_date']    ?? null,
+                'status'             => $photoshopCheck['suspicious'] ? 'under_review' : 'pending',
+                'ip_address'         => get_client_ip(),
+                'user_agent'         => get_user_agent(),
+                'device_fingerprint' => generate_device_fingerprint(),
+            ]);
+        } catch (\Exception $e) {
+            $this->uploadService->delete('kyc/' . $uploadResult['filename']);
+            $this->logger->critical('kyc.create.exception', [
+                'user_id' => $userId,
+                'exception' => get_class($e),
+                'message' => $e->getMessage()
+            ]);
+            return ['success' => false, 'message' => 'خطای سیستمی در ثبت درخواست'];
+        }
 
         if (!$kycId) {
             $this->uploadService->delete('kyc/' . $uploadResult['filename']);
+            $this->logger->error('kyc.create.failed', [
+                'user_id' => $userId
+            ]);
             return ['success' => false, 'message' => 'خطا در ثبت درخواست احراز هویت'];
         }
 
@@ -185,6 +238,14 @@ class KYCService
         $this->audit->record(AuditTrail::USER_KYC_SUBMITTED, $userId, [
             'kyc_id'     => $kycId,
             'suspicious' => $photoshopCheck['suspicious'],
+        ]);
+
+        $this->logger->info('kyc.submit.success', [
+            'user_id' => $userId,
+            'kyc_id' => $kycId,
+            'status' => $photoshopCheck['suspicious'] ? 'under_review' : 'pending',
+            'suspicious' => $photoshopCheck['suspicious'],
+            'suspicious_reasons' => $photoshopCheck['reasons'] ?? []
         ]);
 
         return [
@@ -200,10 +261,26 @@ class KYCService
      */
     public function verifyKYC(int $kycId, int $adminId): array
     {
+        $this->logger->info('kyc.verify.started', [
+            'kyc_id' => $kycId,
+            'admin_id' => $adminId
+        ]);
+        
         $kyc = $this->kycModel->find($kycId);
-        if (!$kyc) return ['success' => false, 'message' => 'درخواست یافت نشد'];
+        if (!$kyc) {
+            $this->logger->error('kyc.verify.not_found', [
+                'kyc_id' => $kycId,
+                'admin_id' => $adminId
+            ]);
+            return ['success' => false, 'message' => 'درخواست یافت نشد'];
+        }
 
         if (!in_array($kyc->status, ['pending', 'under_review'], true)) {
+            $this->logger->warning('kyc.verify.invalid_status', [
+                'kyc_id' => $kycId,
+                'admin_id' => $adminId,
+                'current_status' => $kyc->status
+            ]);
             return ['success' => false, 'message' => 'این درخواست قابل تأیید نیست'];
         }
 
@@ -212,6 +289,11 @@ class KYCService
             $ok = $this->kycModel->updateStatus($kycId, 'verified', null);
             if (!$ok) {
                 $this->db->rollBack();
+                $this->logger->error('kyc.verify.update_failed', [
+                    'kyc_id' => $kycId,
+                    'admin_id' => $adminId,
+                    'user_id' => $kyc->user_id
+                ]);
                 return ['success' => false, 'message' => 'خطا در بروزرسانی وضعیت KYC'];
             }
 
@@ -223,6 +305,11 @@ class KYCService
 
             if (!$ok2) {
                 $this->db->rollBack();
+                $this->logger->error('kyc.verify.user_update_failed', [
+                    'kyc_id' => $kycId,
+                    'admin_id' => $adminId,
+                    'user_id' => $kyc->user_id
+                ]);
                 return ['success' => false, 'message' => 'خطا در بروزرسانی کاربر'];
             }
 
@@ -233,18 +320,34 @@ class KYCService
                 'admin_id' => $adminId,
             ], $adminId);
 
+            $this->logger->info('kyc.verify.success', [
+                'kyc_id' => $kycId,
+                'admin_id' => $adminId,
+                'user_id' => $kyc->user_id
+            ]);
+
             if ($this->notificationService) {
                 try {
                     $this->notificationService->kycVerified((int)$kyc->user_id);
                 } catch (\Throwable $e) {
-                    error_log('KYC notify failed: ' . $e->getMessage());
+                    log_error_advanced(
+                        'خطا در ارسال نوتیفیکیشن تأیید KYC',
+                        'ERROR',
+                        $e,
+                        ['kyc_id' => $kycId, 'user_id' => $kyc->user_id]
+                    );
                 }
             }
 
             return ['success' => true, 'message' => 'احراز هویت با موفقیت تأیید شد'];
         } catch (\Exception $e) {
             $this->db->rollBack();
-            error_log('verifyKYC: ' . $e->getMessage());
+            log_error_advanced(
+                'خطای سیستمی در تأیید KYC',
+                'CRITICAL',
+                $e,
+                ['kyc_id' => $kycId, 'admin_id' => $adminId, 'user_id' => $kyc->user_id ?? null]
+            );
             return ['success' => false, 'message' => 'خطای سیستمی در تأیید KYC'];
         }
     }
@@ -254,10 +357,27 @@ class KYCService
      */
     public function rejectKYC(int $kycId, string $reason, int $adminId = 0): array
     {
+        $this->logger->info('kyc.reject.started', [
+            'kyc_id' => $kycId,
+            'admin_id' => $adminId,
+            'reason' => $reason
+        ]);
+        
         $kyc = $this->kycModel->find($kycId);
-        if (!$kyc) return ['success' => false, 'message' => 'درخواست یافت نشد'];
+        if (!$kyc) {
+            $this->logger->error('kyc.reject.not_found', [
+                'kyc_id' => $kycId,
+                'admin_id' => $adminId
+            ]);
+            return ['success' => false, 'message' => 'درخواست یافت نشد'];
+        }
 
         if (!in_array($kyc->status, ['pending', 'under_review'], true)) {
+            $this->logger->warning('kyc.reject.invalid_status', [
+                'kyc_id' => $kycId,
+                'admin_id' => $adminId,
+                'current_status' => $kyc->status
+            ]);
             return ['success' => false, 'message' => 'این درخواست قابل رد نیست'];
         }
 
@@ -266,6 +386,11 @@ class KYCService
             $ok = $this->kycModel->updateStatus($kycId, 'rejected', $reason);
             if (!$ok) {
                 $this->db->rollBack();
+                $this->logger->error('kyc.reject.update_failed', [
+                    'kyc_id' => $kycId,
+                    'admin_id' => $adminId,
+                    'user_id' => $kyc->user_id
+                ]);
                 return ['success' => false, 'message' => 'خطا در بروزرسانی وضعیت KYC'];
             }
 
@@ -276,6 +401,11 @@ class KYCService
 
             if (!$ok2) {
                 $this->db->rollBack();
+                $this->logger->error('kyc.reject.user_update_failed', [
+                    'kyc_id' => $kycId,
+                    'admin_id' => $adminId,
+                    'user_id' => $kyc->user_id
+                ]);
                 return ['success' => false, 'message' => 'خطا در بروزرسانی کاربر'];
             }
 
@@ -287,18 +417,35 @@ class KYCService
                 'reason'   => $reason,
             ], $adminId);
 
+            $this->logger->warning('kyc.reject.success', [
+                'kyc_id' => $kycId,
+                'admin_id' => $adminId,
+                'user_id' => $kyc->user_id,
+                'reason' => $reason
+            ]);
+
             if ($this->notificationService) {
                 try {
                     $this->notificationService->kycRejected((int)$kyc->user_id, $reason);
                 } catch (\Throwable $e) {
-                    error_log('KYC reject notify failed: ' . $e->getMessage());
+                    log_error_advanced(
+                        'خطا در ارسال نوتیفیکیشن رد KYC',
+                        'ERROR',
+                        $e,
+                        ['kyc_id' => $kycId, 'user_id' => $kyc->user_id]
+                    );
                 }
             }
 
             return ['success' => true, 'message' => 'درخواست رد شد'];
         } catch (\Exception $e) {
             $this->db->rollBack();
-            error_log('rejectKYC: ' . $e->getMessage());
+            log_error_advanced(
+                'خطای سیستمی در رد KYC',
+                'CRITICAL',
+                $e,
+                ['kyc_id' => $kycId, 'admin_id' => $adminId, 'user_id' => $kyc->user_id ?? null]
+            );
             return ['success' => false, 'message' => 'خطای سیستمی در رد KYC'];
         }
     }

@@ -5,6 +5,7 @@ use App\Models\User;
 use App\Services\AuditTrail;
 use App\Models\PasswordReset;
 use App\Models\ActivityLog;
+use Core\Logger;
 use Core\Session;
 use Core\RateLimiter;
 use App\Services\EmailService;
@@ -21,10 +22,10 @@ class AuthService
     private RateLimiter $rateLimiter;
     private SessionService $sessionService;
     private ?EmailService $emailService;
+    private Logger        $logger;
 
     /**
      * Container این‌ها را auto-wire می‌کند (type-hint کافی است)
-     * nullable نگه داشتیم تا backward-compatible بماند
      */
     public function __construct(
         User $userModel,
@@ -33,6 +34,7 @@ class AuthService
         Session $session,
         RateLimiter $rateLimiter,
         SessionService $sessionService,
+        Logger $logger,
         ?EmailService $emailService = null
     ) {
         $this->userModel          = $userModel;
@@ -42,6 +44,7 @@ class AuthService
         $this->rateLimiter        = $rateLimiter;
         $this->sessionService     = $sessionService;
         $this->emailService       = $emailService;
+        $this->logger             = $logger->withChannel('auth');
     }
 
     /**
@@ -82,7 +85,7 @@ class AuthService
                     $this->emailService->sendWelcomeEmail($userId);
                 }
             } catch (\Throwable $e) {
-                logger()->error('Registration email failed: ' . $e->getMessage());
+                $this->logger->error('auth.register.email_failed', ['err' => $e->getMessage()]);
             }
         }
 
@@ -227,7 +230,7 @@ class AuthService
             try {
                 $this->emailService->sendPasswordResetEmail((int)$user->id, $token);
             } catch (\Throwable $e) {
-                logger()->error('Password reset email failed: ' . $e->getMessage());
+                $this->logger->error('auth.password_reset.email_failed', ['err' => $e->getMessage()]);
             }
         }
 

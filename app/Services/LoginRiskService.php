@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use Core\Session;
+use Core\Logger;
 
 /**
  * LoginRiskService — سرویس تشخیص ریسک لاگین
@@ -17,14 +18,16 @@ use Core\Session;
 class LoginRiskService
 {
     private Session $session;
+    private Logger $logger;
 
     // کلید session برای شمارش تلاش‌های ناموفق هر IP
     private const SESSION_KEY = 'login_fail_count';
     private const SESSION_IP_KEY = 'login_fail_ip';
 
-    public function __construct(Session $session)
+    public function __construct(Session $session, Logger $logger)
     {
         $this->session = $session;
+        $this->logger = $logger->withChannel('security');
     }
 
     /**
@@ -37,28 +40,47 @@ class LoginRiskService
     public function getCaptchaType(string $context = 'login'): ?string
     {
         $score = $this->getRiskScore($context);
+        $ip = get_client_ip();
 
         // ثبت‌نام همیشه کپچا دارد (حداقل math)
         if ($context === 'register') {
             if ($score <= 30) {
-                return 'math';         // پیش‌فرض
+                $captchaType = 'math';
             } elseif ($score <= 60) {
-                return 'image';        // بعد از چند خطا
+                $captchaType = 'image';
             } else {
-                return 'recaptcha_v2'; // خطای زیاد
+                $captchaType = 'recaptcha_v2';
             }
+            
+            $this->logger->info('captcha.required', [
+                'context' => $context,
+                'score' => $score,
+                'captcha_type' => $captchaType,
+                'ip' => $ip
+            ]);
+            
+            return $captchaType;
         }
 
         // ورود: بر اساس ریسک
         if ($score === 0) {
             return null;
         } elseif ($score <= 30) {
-            return 'math';
+            $captchaType = 'math';
         } elseif ($score <= 60) {
-            return 'image';
+            $captchaType = 'image';
         } else {
-            return 'recaptcha_v2';
+            $captchaType = 'recaptcha_v2';
         }
+        
+        $this->logger->info('captcha.required', [
+            'context' => $context,
+            'score' => $score,
+            'captcha_type' => $captchaType,
+            'ip' => $ip
+        ]);
+        
+        return $captchaType;
     }
 
     /**
@@ -103,6 +125,25 @@ class LoginRiskService
         $data['count']++;
         $data['last_at'] = time();
         $this->session->set($key, $data);
+        
+        // لاگ تلاش ناموفق
+        $logLevel = $data['count'] >= 4 ? 'warning' : 'info';
+        $this->logger->{$logLevel}('login.failure.recorded', [
+            'context' => $context,
+            'ip' => $ip,
+            'fail_count' => $data['count'],
+            'first_at' => date('Y-m-d H:i:s', $data['first_at'])
+        ]);
+        
+        // هشدار برای تلاش‌های مشکوک
+        if ($data['count'] >= 5) {
+            $this->logger->critical('login.suspicious.activity', [
+                'context' => $context,
+                'ip' => $ip,
+                'fail_count' => $data['count'],
+                'duration_minutes' => round((time() - $data['first_at']) / 60, 2)
+            ]);
+        }
     }
 
     /**
@@ -112,6 +153,16 @@ class LoginRiskService
     {
         $ip = get_client_ip();
         $key = $this->buildKey($context, $ip);
+        
+        $data = $this->session->get($key);
+        if ($data && isset($data['count'])) {
+            $this->logger->info('login.failures.cleared', [
+                'context' => $context,
+                'ip' => $ip,
+                'previous_fail_count' => $data['count']
+            ]);
+        }
+        
         $this->session->delete($key);
     }
 

@@ -2,6 +2,8 @@
 
 namespace App\Services;
 
+use Core\Logger;
+
 use App\Models\EmailQueue;
 use App\Models\NotificationPreference;
 use App\Models\Setting;
@@ -33,6 +35,7 @@ class EmailService
     private string $smtpEncryption;
     private string $fromEmail;
     private string $fromName;
+    private Logger $logger;
 
     public function __construct(
         EmailQueue             $emailQueue,
@@ -84,7 +87,7 @@ class EmailService
         try {
             return $this->sendViaSMTP($toEmail, $toName, $subject, $bodyHtml);
         } catch (\Exception $e) {
-            logger()->error('EmailService::sendDirect failed', ['to' => $toEmail, 'error' => $e->getMessage()]);
+            $this->logger->error('email.send_direct.failed', ['to' => $toEmail, 'error' => $e->getMessage()]);
             return false;
         }
     }
@@ -114,12 +117,12 @@ class EmailService
         try {
             $user = $this->userModel->find($userId);
             if (!$user || !$user->email) {
-                logger()->warning('EmailService::enqueue skipped — no email', ['user_id' => $userId]);
+                $this->logger->warning('email.enqueue.no_email', ['user_id' => $userId]);
                 return null;
             }
 
             if (!$this->prefModel->isEmailEnabled($userId, 'system')) {
-                logger()->info('EmailService::enqueue skipped — user pref', ['user_id' => $userId]);
+                $this->logger->info('email.enqueue.pref_skip', ['user_id' => $userId]);
                 return null;
             }
 
@@ -134,11 +137,11 @@ class EmailService
                 'scheduled_at' => $scheduledAt,
             ]);
 
-            logger()->info('EmailService::enqueue — added', ['email_id' => $emailId, 'user_id' => $userId]);
+            $this->logger->info('email.enqueue.added', ['email_id' => $emailId, 'user_id' => $userId]);
             return $emailId;
 
         } catch (\Exception $e) {
-            logger()->error('EmailService::enqueue failed', ['user_id' => $userId, 'error' => $e->getMessage()]);
+            $this->logger->error('email.enqueue.failed', ['user_id' => $userId, 'error' => $e->getMessage()]);
             return null;
         }
     }
@@ -176,7 +179,7 @@ class EmailService
             usleep(300_000); // 0.3s فاصله ضد-spam
         }
 
-        logger()->info('EmailService::processQueue done', $stats);
+        $this->logger->info('email.queue.processed', $stats);
         return $stats;
     }
 
@@ -394,7 +397,7 @@ class EmailService
 
             $mail->send();
 
-            logger()->info('EmailService::SMTP sent', [
+            $this->logger->info('email.smtp.sent', [
                 'to'   => $toEmail,
                 'subj' => $subject,
                 'host' => $this->smtpHost . ':' . $this->smtpPort,
@@ -403,7 +406,7 @@ class EmailService
             return true;
 
         } catch (\Exception $e) {
-            logger()->error('EmailService::SMTP failed', [
+            $this->logger->error('email.smtp.failed', [
                 'to'    => $toEmail,
                 'error' => $e->getMessage(),
                 'host'  => $this->smtpHost . ':' . $this->smtpPort,

@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use Core\Database;
+use Core\Logger;
 use App\Models\Withdrawal;
 use App\Models\WithdrawalLimit;
 use App\Models\User;
@@ -23,6 +24,7 @@ class WithdrawalService
     private WalletService            $wallet;
     private NotificationService      $notifier;
     private AuditTrail               $audit;
+    private Logger                  $logger;
 
     public function __construct(
         Database               $db,
@@ -35,7 +37,8 @@ class WithdrawalService
         \App\Models\Transaction     $transactionModel,
         \App\Models\User            $userModel,
         WithdrawalLimitService $withdrawalLimitService,
-        AuditTrail             $audit
+        AuditTrail             $audit,
+        Logger                 $logger
     ) {
         $this->db                     = $db;
         $this->model                  = $model;
@@ -48,6 +51,7 @@ class WithdrawalService
         $this->userModel              = $userModel;
         $this->withdrawalLimitService = $withdrawalLimitService;
         $this->audit                  = $audit;
+        $this->logger                 = $logger;
     }
 
     /**
@@ -248,7 +252,7 @@ class WithdrawalService
 
         } catch (\Exception $e) {
             $this->db->rollBack();
-            logger()->error('withdrawal.adminApprove.failed', ['id' => $withdrawalId, 'err' => $e->getMessage()]);
+            $this->logger->error('withdrawal.approve.failed', ['id' => $withdrawalId, 'err' => $e->getMessage()]);
             return ['success' => false, 'message' => 'خطا در تکمیل برداشت'];
         }
     }
@@ -345,7 +349,7 @@ class WithdrawalService
 
         } catch (\Exception $e) {
             $this->db->rollBack();
-            logger()->error('withdrawal.adminReject.failed', [
+            $this->logger->error('withdrawal.reject.failed', [
                 'id'  => $withdrawalId,
                 'err' => $e->getMessage(),
             ]);

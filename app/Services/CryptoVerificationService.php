@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\CryptoDeposit;
 use App\Models\Setting;
 use Core\Database;
+use Core\Logger;
 
 class CryptoVerificationService
 {
@@ -14,9 +15,12 @@ class CryptoVerificationService
     private WalletService $walletService;
     
     // آدرس‌های ولت سایت (از تنظیمات)
+    private Logger $logger;
     private array $siteWallets = [];
     
-    public function __construct(Database $db, 
+    public function __construct(
+        Database $db,
+        Logger   $logger,
         WalletService $walletService,
         \App\Models\CryptoDeposit $depositModel,
         \App\Models\Setting $settingModel)
@@ -27,6 +31,7 @@ class CryptoVerificationService
         $this->settingModel = $settingModel;
         
         // بارگذاری ولت‌ها از تنظیمات
+        $this->logger = $logger;
         $this->loadSiteWallets();
     }
     
@@ -112,7 +117,7 @@ class CryptoVerificationService
             }
             
         } catch (\Exception $e) {
-            logger()->error('Auto verification failed', [
+            $this->logger->error('crypto.auto_verify.failed', [
                 'deposit_id' => $depositId,
                 'error' => $e->getMessage()
             ]);
@@ -154,7 +159,7 @@ class CryptoVerificationService
             }
             
         } catch (\Exception $e) {
-            logger()->error('Transaction verification failed', [
+            $this->logger->error('crypto.tx_verify.failed', [
                 'network' => $network,
                 'tx_hash' => $txHash,
                 'error' => $e->getMessage()
@@ -262,7 +267,7 @@ class CryptoVerificationService
             }
             
         } catch (\Exception $e) {
-            logger()->error('TronScan API error', [
+            $this->logger->error('crypto.tronscan.error', [
                 'tx_hash' => $txHash,
                 'error' => $e->getMessage()
             ]);
@@ -387,7 +392,7 @@ class CryptoVerificationService
             }
             
         } catch (\Exception $e) {
-            logger()->error('BscScan API error', [
+            $this->logger->error('crypto.bscscan.error', [
                 'tx_hash' => $txHash,
                 'error' => $e->getMessage()
             ]);
@@ -484,7 +489,7 @@ public function approveDeposit(int $depositId, ?int $adminId = null, bool $auto 
 
         $this->db->commit();
 
-        logger()->info('Crypto deposit approved', [
+        $this->logger->info('crypto.deposit.approved', [
             'deposit_id'     => $depositId,
             'user_id'        => $deposit->user_id,
             'amount'         => $deposit->amount,
@@ -502,7 +507,7 @@ public function approveDeposit(int $depositId, ?int $adminId = null, bool $auto 
     } catch (\Exception $e) {
         $this->db->rollBack();
 
-        logger()->error('Crypto deposit approval failed', [
+        $this->logger->error('crypto.deposit.approve_failed', [
             'deposit_id' => $depositId,
             'error'      => $e->getMessage()
         ]);
@@ -533,7 +538,7 @@ public function approveDeposit(int $depositId, ?int $adminId = null, bool $auto 
                 'reviewed_at' => date('Y-m-d H:i:s')
             ]);
             
-            logger()->warning('Crypto deposit rejected', [
+            $this->logger->warning('crypto.deposit.rejected', [
                 'deposit_id' => $depositId,
                 'user_id' => $deposit->user_id,
                 'admin_id' => $adminId,
@@ -546,7 +551,7 @@ public function approveDeposit(int $depositId, ?int $adminId = null, bool $auto 
             ];
             
         } catch (\Exception $e) {
-            logger()->error('Crypto deposit rejection failed', [
+            $this->logger->error('crypto.deposit.reject_failed', [
                 'deposit_id' => $depositId,
                 'error' => $e->getMessage()
             ]);

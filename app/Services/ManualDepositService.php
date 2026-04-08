@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use Core\Database;
+use Core\Logger;
 use App\Models\ManualDeposit;
 use App\Models\BankCard;
 use App\Models\User;
@@ -16,6 +17,7 @@ class ManualDepositService
     private WalletService           $wallet;
     private NotificationService     $notifier;
     private AuditTrail              $audit;
+    private Logger                 $logger;
 
     public function __construct(
         Database                $db,
@@ -24,7 +26,8 @@ class ManualDepositService
         \App\Models\ManualDeposit $model,
         \App\Models\BankCard      $bankCardModel,
         \App\Models\User          $userModel,
-        AuditTrail              $audit
+        AuditTrail              $audit,
+        Logger                  $logger
     ) {
         $this->db            = $db;
         $this->model         = $model;
@@ -33,6 +36,7 @@ class ManualDepositService
         $this->bankCardModel = $bankCardModel;
         $this->userModel     = $userModel;
         $this->audit         = $audit;
+        $this->logger        = $logger;
     }
 
     public function create(int $userId, array $data, ?string $receiptPath): array
@@ -82,7 +86,7 @@ class ManualDepositService
             'user_agent'       => get_user_agent(),
         ]);
 
-        logger()->info('manual_deposit.created', ['user_id' => $userId, 'id' => $id, 'amount' => $amount]);
+        $this->logger->info('manual_deposit.created', ['user_id' => $userId, 'id' => $id, 'amount' => $amount]);
 
         return [
             'success'    => true,
@@ -153,7 +157,7 @@ class ManualDepositService
 
         } catch (\Exception $e) {
             $this->db->rollBack();
-            logger()->error('manual_deposit.approve.failed', ['id' => $depositId, 'err' => $e->getMessage()]);
+            $this->logger->error('manual_deposit.approve.failed', ['id' => $depositId, 'err' => $e->getMessage()]);
             return ['success' => false, 'message' => 'خطا در تأیید واریز'];
         }
     }

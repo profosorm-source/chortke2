@@ -2,6 +2,8 @@
 
 namespace App\Services;
 
+use Core\Logger;
+
 
 use App\Models\BankCard;
 use App\Models\User;
@@ -11,13 +13,16 @@ class BankCardService
     private \App\Models\User $userModel;
 
     private BankCard $model;
+    private Logger   $logger;
 
     public function __construct(
         \App\Models\BankCard $model,
-        \App\Models\User $userModel)
-    {
-        $this->model = $model;
+        \App\Models\User $userModel,
+        Logger $logger
+    ) {
+        $this->model     = $model;
         $this->userModel = $userModel;
+        $this->logger    = $logger->withChannel('banking');
     }
 
     public function create(int $userId, array $data): array
@@ -68,7 +73,7 @@ class BankCardService
             'is_primary' => $count === 0,
         ]);
 
-        logger()->info('bankcard.created', ['user_id' => $userId, 'card_id' => $id]);
+        $this->logger->info('bankcard.created', ['user_id' => $userId, 'card_id' => $id]);
 
         return ['success' => true, 'message' => 'کارت ثبت شد و در انتظار تأیید است', 'card_id' => (int)$id];
     }
@@ -112,7 +117,7 @@ class BankCardService
 
         if (!$ok) return ['success' => false, 'message' => 'خطا در ویرایش کارت'];
 
-        logger()->info('bankcard.updated_by_user', ['user_id' => $userId, 'card_id' => $cardId]);
+        $this->logger->info('bankcard.updated', ['user_id' => $userId, 'card_id' => $cardId]);
 
         return ['success' => true, 'message' => 'کارت ویرایش شد و در انتظار تأیید مجدد است'];
     }

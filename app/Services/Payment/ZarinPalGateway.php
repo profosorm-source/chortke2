@@ -3,19 +3,21 @@
 namespace App\Services\Payment;
 
 use App\Models\PaymentGateway;
+use Core\Logger;
 
 class ZarinPalGateway implements PaymentGatewayInterface
 {
     private \App\Models\PaymentGateway $paymentGatewayModel;
     private ?object $config;
+    private Logger  $logger;
 
     public function __construct(
-        \App\Models\PaymentGateway $paymentGatewayModel
-    )
-    {
-        $model = $this->paymentGatewayModel;
-        $this->config = $model->getActiveGateway('zarinpal');
+        \App\Models\PaymentGateway $paymentGatewayModel,
+        ?Logger                   $logger = null
+    ) {
         $this->paymentGatewayModel = $paymentGatewayModel;
+        $this->config = $paymentGatewayModel->getActiveGateway('zarinpal');
+        $this->logger = $logger ?? Logger::getInstance();
     }
 
     public function request(int $amount, string $description, string $callback): array
@@ -78,7 +80,7 @@ class ZarinPalGateway implements PaymentGatewayInterface
             ];
 
         } catch (\Exception $e) {
-            logger()->error('ZarinPal request failed', ['error' => $e->getMessage()]);
+            $this->logger->error('payment.zarinpal.request_failed', ['error' => $e->getMessage()]);
             return [
                 'success' => false,
                 'message' => 'خطا در برقراری ارتباط با درگاه'
@@ -139,7 +141,7 @@ class ZarinPalGateway implements PaymentGatewayInterface
             ];
 
         } catch (\Exception $e) {
-            logger()->error('ZarinPal verify failed', ['error' => $e->getMessage()]);
+            $this->logger->error('payment.zarinpal.verify_failed', ['error' => $e->getMessage()]);
             return [
                 'success' => false,
                 'message' => 'خطا در تأیید پرداخت'
