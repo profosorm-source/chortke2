@@ -4,195 +4,179 @@ namespace App\Controllers\Admin;
 
 use App\Models\Banner;
 use App\Models\BannerPlacement;
-use App\Services\BannerService;
 use App\Controllers\Admin\BaseAdminController;
+use Core\Database;
 
 class BannerController extends BaseAdminController
 {
-    private Banner $bannerModel;
-    private BannerPlacement $placementModel;
-    private BannerService $bannerService;
+    private Banner $banner;
+    private BannerPlacement $placement;
 
-    public function __construct(
-        \App\Models\Banner $bannerModel,
-        \App\Models\BannerPlacement $placementModel,
-        \App\Services\BannerService $bannerService)
+    public function __construct(Banner $banner, BannerPlacement $placement)
     {
         parent::__construct();
-        $this->bannerModel = $bannerModel;
-        $this->placementModel = $placementModel;
-        $this->bannerService = $bannerService;
+        $this->banner = $banner;
+        $this->placement = $placement;
     }
 
     public function index()
     {
-        $page = (int)($this->request->get('page') ?: 1);
+        $page = max(1, (int)($_GET['page'] ?? 1));
         $perPage = 20;
-        $offset = ($page - 1) * $perPage;
 
-        $filters = \array_filter([
-            'placement' => $this->request->get('placement'),
-            'is_active'  => $this->request->get('is_active') !== null && $this->request->get('is_active') !== '' ? $this->request->get('is_active') : null,
-            'search'     => $this->request->get('search'),
+        $filters = array_filter([
+            'placement' => $_GET['placement'] ?? null,
+            'banner_type' => $_GET['banner_type'] ?? null,
+            'category' => $_GET['category'] ?? null,
+            'is_active' => $_GET['is_active'] ?? null,
+            'status' => $_GET['status'] ?? null,
+            'search' => $_GET['search'] ?? null,
         ], fn($v) => $v !== null && $v !== '');
 
-        $banners    = $this->bannerModel->all($filters, $perPage, $offset);
-        $total      = $this->bannerModel->count($filters);
-        $totalPages = (int)\ceil($total / $perPage);
-        $placements = $this->placementModel->allWithBannerCount();
-        $stats      = $this->bannerModel->getStats();
+        $banners = $this->banner->all($filters, $perPage, ($page - 1) * $perPage);
+        $total = $this->banner->count($filters);
+        $placements = $this->placement->all();
+        $stats = $this->banner->getStats();
 
-        return view('admin.banners.index', compact('banners', 'placements', 'stats', 'filters', 'page', 'totalPages', 'total'));
+        return view('admin.banners.index', compact('banners', 'placements', 'filters', 'stats', 'total', 'page', 'perPage'));
     }
 
-    public function showCreate()
+    public function create()
     {
-        $placements = $this->placementModel->all();
+        $placements = $this->placement->all();
         return view('admin.banners.create', compact('placements'));
     }
 
     public function store()
     {
+        $title = $_POST['title'] ?? '';
+        $placement = $_POST['placement'] ?? '';
+
+        if (empty($title) || empty($placement)) {
+            $_SESSION['error'] = 'عنوان و جایگاه الزامی است';
+            return redirect('/admin/banners/create');
+        }
+
+        $imagePath = $this->uploadImage($_FILES['image'] ?? null);
+
         $data = [
-            'title'       => $this->request->post('title'),
-            'link'        => $this->request->post('link'),
-            'placement'   => $this->request->post('placement'),
-            'type'        => $this->request->post('type') ?: 'image',
-            'custom_code' => $this->request->post('custom_code'),
-            'sort_order'  => (int)($this->request->post('sort_order') ?: 0),
-            'is_active'   => $this->request->post('is_active') !== null ? (int)$this->request->post('is_active') : 1,
-            'start_date'  => $this->request->post('start_date') ?: null,
-            'end_date'    => $this->request->post('end_date') ?: null,
-            'target'      => $this->request->post('target') ?: '_blank',
-            'alt_text'    => $this->request->post('alt_text'),
+            'title' => $title,
+            'image_path' => $imagePath,
+            'link' => $_POST['link'] ?? null,
+            'placement' => $placement,
+            'banner_type' => $_POST['banner_type'] ?? 'system',
+            'category' => $_POST['category'] ?? null,
+            'sort_order' => (int)($_POST['sort_order'] ?? 0),
+            'is_active' => (int)($_POST['is_active'] ?? 1),
+            'start_date' => $_POST['start_date'] ?? null,
+            'end_date' => $_POST['end_date'] ?? null,
+            'target' => $_POST['target'] ?? '_blank',
+            'alt_text' => $_POST['alt_text'] ?? null,
+            'created_by' => user_id(),
         ];
 
-        if (isset($_FILES['image']) && $_FILES['image']['error'] !== UPLOAD_ERR_NO_FILE) {
-            $data['image_file'] = $_FILES['image'];
-        }
+        $id = $this->banner->create($data);
 
-        $result = $this->bannerService->createBanner($data, user_id());
-
-        if (!$result['success']) {
-            $this->session->setFlash('error', 'خطا در ایجاد بنر');
-            $this->session->setFlash('errors', $result['errors']);
-            $this->session->setFlash('old', $data);
-            return redirect(url('/admin/banners/create'));
-        }
-
-        $this->session->setFlash('success', 'بنر با موفقیت ایجاد شد');
-        return redirect(url('/admin/banners'));
+        $_SESSION['success'] = 'بنر ایجاد شد';
+        return redirect('/admin/banners');
     }
 
-    public function showEdit()
+    public function edit()
     {
-        $id = (int)$this->request->param('id');
-        $banner = $this->bannerModel->find($id);
+        $id = (int)($_GET['id'] ?? 0);
+        $banner = $this->banner->find($id);
 
         if (!$banner) {
-            $this->session->setFlash('error', 'بنر یافت نشد');
-            return redirect(url('/admin/banners'));
+            $_SESSION['error'] = 'بنر یافت نشد';
+            return redirect('/admin/banners');
         }
 
-        $placements = $this->placementModel->all();
+        $placements = $this->placement->all();
         return view('admin.banners.edit', compact('banner', 'placements'));
     }
 
     public function update()
     {
-        $id = (int)$this->request->param('id');
+        $id = (int)($_POST['id'] ?? 0);
+
+        $imagePath = $this->uploadImage($_FILES['image'] ?? null);
 
         $data = [
-            'title'       => $this->request->post('title'),
-            'link'        => $this->request->post('link'),
-            'placement'   => $this->request->post('placement'),
-            'type'        => $this->request->post('type') ?: 'image',
-            'custom_code' => $this->request->post('custom_code'),
-            'sort_order'  => (int)($this->request->post('sort_order') ?: 0),
-            'is_active'   => $this->request->post('is_active') !== null ? (int)$this->request->post('is_active') : 1,
-            'start_date'  => $this->request->post('start_date') ?: null,
-            'end_date'    => $this->request->post('end_date') ?: null,
-            'target'      => $this->request->post('target') ?: '_blank',
-            'alt_text'    => $this->request->post('alt_text'),
+            'title' => $_POST['title'] ?? '',
+            'link' => $_POST['link'] ?? null,
+            'placement' => $_POST['placement'] ?? '',
+            'category' => $_POST['category'] ?? null,
+            'sort_order' => (int)($_POST['sort_order'] ?? 0),
+            'is_active' => (int)($_POST['is_active'] ?? 1),
+            'start_date' => $_POST['start_date'] ?? null,
+            'end_date' => $_POST['end_date'] ?? null,
+            'target' => $_POST['target'] ?? '_blank',
+            'alt_text' => $_POST['alt_text'] ?? null,
         ];
 
-        if (isset($_FILES['image']) && $_FILES['image']['error'] !== UPLOAD_ERR_NO_FILE) {
-            $data['image_file'] = $_FILES['image'];
+        if ($imagePath) {
+            $data['image_path'] = $imagePath;
         }
 
-        $result = $this->bannerService->updateBanner($id, $data);
+        $this->banner->update($id, $data);
 
-        if (!$result['success']) {
-            $this->session->setFlash('error', 'خطا در بروزرسانی بنر');
-            $this->session->setFlash('errors', $result['errors']);
-            return redirect(url("/admin/banners/{$id}/edit"));
+        $_SESSION['success'] = 'بنر بروزرسانی شد';
+        return redirect('/admin/banners');
+    }
+
+    public function approve()
+    {
+        $id = (int)($_POST['id'] ?? 0);
+        $this->banner->approve($id, user_id());
+        $_SESSION['success'] = 'بنر تایید شد';
+        return redirect('/admin/banners');
+    }
+
+    public function reject()
+    {
+        $id = (int)($_POST['id'] ?? 0);
+        $reason = $_POST['reason'] ?? 'رد شد';
+        $this->banner->reject($id, $reason);
+        $_SESSION['success'] = 'بنر رد شد';
+        return redirect('/admin/banners');
+    }
+
+    public function delete()
+    {
+        $id = (int)($_POST['id'] ?? 0);
+        $this->banner->softDelete($id);
+        $_SESSION['success'] = 'بنر حذف شد';
+        return redirect('/admin/banners');
+    }
+
+    public function stats()
+    {
+        $stats = $this->banner->getStats();
+        $placements = $this->placement->allWithBannerCount();
+        return view('admin.banners.stats', compact('stats', 'placements'));
+    }
+
+    private function uploadImage($file): ?string
+    {
+        if (!$file || $file['error'] !== UPLOAD_ERR_OK) {
+            return null;
         }
 
-        $this->session->setFlash('success', 'بنر با موفقیت بروزرسانی شد');
-        return redirect(url('/admin/banners'));
-    }
-
-    public function delete(): void
-    {
-        $id = (int)$this->request->param('id');
-        $result = $this->bannerService->deleteBanner($id);
-        $this->response->json($result);
-    }
-
-    public function toggle(): void
-    {
-        $id = (int)$this->request->param('id');
-        $result = $this->bannerService->toggleBanner($id);
-        $this->response->json($result);
-    }
-
-    public function trackClick(): void
-    {
-        $id = (int)$this->request->param('id');
-        $result = $this->bannerService->trackClick($id);
-        $this->response->json($result);
-    }
-
-    public function placements()
-    {
-        $placements = $this->placementModel->allWithBannerCount();
-        return view('admin.banners.placements', compact('placements'));
-    }
-
-    public function updatePlacement(): void
-    {
-        $id = (int)$this->request->param('id');
-        $data = \json_decode(\file_get_contents('php://input'), true) ?? [];
-        $result = $this->bannerService->updatePlacement($id, $data);
-        $this->response->json($result);
-    }
-
-    public function togglePlacement(): void
-    {
-        $id = (int)$this->request->param('id');
-        $result = $this->bannerService->togglePlacement($id);
-        $this->response->json($result);
-    }
-
-    public function stats(): void
-    {
-        $id = (int)$this->request->param('id');
-        $banner = $this->bannerModel->find($id);
-
-        if (!$banner) {
-            $this->response->json(['success' => false, 'message' => 'بنر یافت نشد']);
-            return;
+        $uploadDir = dirname(__DIR__, 3) . '/public/uploads/banners/';
+        if (!is_dir($uploadDir)) {
+            mkdir($uploadDir, 0755, true);
         }
 
-        $clickStats = $this->bannerModel->getClickStats($id, 30);
+        $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+        if (!in_array($ext, ['jpg', 'jpeg', 'png', 'gif', 'webp'])) {
+            return null;
+        }
 
-        $this->response->json([
-            'success' => true,
-            'banner' => [
-                'id' => $banner->id, 'title' => $banner->title,
-                'clicks' => $banner->clicks, 'impressions' => $banner->impressions, 'ctr' => $banner->ctr,
-            ],
-            'daily_clicks' => $clickStats,
-        ]);
+        $filename = uniqid('banner_') . '.' . $ext;
+        if (move_uploaded_file($file['tmp_name'], $uploadDir . $filename)) {
+            return '/uploads/banners/' . $filename;
+        }
+
+        return null;
     }
 }
