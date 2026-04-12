@@ -281,6 +281,55 @@ $scheduler->weekly('Sunday', '05:00', function () {
 }, 'weekly_kpi_report');
 
 // ==========================================
+//  SocialTask Jobs
+// ==========================================
+
+use App\Services\SocialTask\TrustScoreService  as SocialTrustService;
+use App\Services\SocialTask\SocialTaskService   as SocialTaskSvc;
+
+// ── هر شب ساعت ۱ — Web/Mobile Split (محاسبه median reward)
+$scheduler->daily('01:00', function () {
+    $svc = Container::getInstance()->make(SocialTaskSvc::class);
+    $median = $svc->updateMedianReward();
+    return ['median_reward' => $median];
+}, 'social_task_median_reward');
+
+// ── هر شب ساعت ۱:۳۰ — Trust Score هفتگی (بهبود + جریمه soft_excess)
+$scheduler->daily('01:30', function () {
+    $svc    = Container::getInstance()->make(SocialTrustService::class);
+    $result = $svc->processWeeklyRecovery();
+    return $result;
+}, 'social_task_trust_recovery');
+
+// ── هر ساعت — انقضای execution های زمان‌گذشته (بیش از ۲۴ ساعت pending)
+$scheduler->hourly(function () {
+    $db = Database::getInstance();
+    $affected = $db->query(
+        "UPDATE social_task_executions
+         SET status = 'expired', updated_at = NOW()
+         WHERE status = 'pending'
+           AND created_at < DATE_SUB(NOW(), INTERVAL 24 HOUR)"
+    );
+    $count = $db->rowCount() ?? 0;
+    if ($count > 0) {
+        // بازگرداندن slot به آگهی
+        $db->query(
+            "UPDATE social_ads sa
+             JOIN (
+                 SELECT ad_id, COUNT(*) AS cnt
+                 FROM social_task_executions
+                 WHERE status = 'expired'
+                   AND updated_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)
+                 GROUP BY ad_id
+             ) ex ON ex.ad_id = sa.id
+             SET sa.remaining_slots = sa.remaining_slots + ex.cnt
+             WHERE sa.status = 'active'"
+        );
+    }
+    return ['expired' => $count];
+}, 'social_task_expire_pending');
+
+// ==========================================
 //  اجرا
 // ==========================================
 

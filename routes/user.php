@@ -14,21 +14,23 @@ use App\Controllers\User\BankCardController     as UserBankCardController;
 use App\Controllers\User\NotificationController as UserNotificationController;
 use App\Controllers\User\TwoFactorController;
 use App\Controllers\User\SocialAccountController;
-use App\Controllers\User\AdTaskController;
-use App\Controllers\User\TaskController;
 use App\Controllers\User\SEOTaskController;
 use App\Controllers\User\CustomTaskController;
 use App\Controllers\User\StoryController;
 use App\Controllers\User\ContentController;
-use App\Controllers\User\InvestmentController   as UserInvestmentController;
-use App\Controllers\User\LotteryController      as UserLotteryController;
-use App\Controllers\User\ReferralController     as UserReferralController;
-use App\Controllers\User\LevelController        as UserLevelController;
-use App\Controllers\User\BugReportController    as UserBugReportController;
+use App\Controllers\User\InvestmentController       as UserInvestmentController;
+use App\Controllers\User\LotteryController          as UserLotteryController;
+use App\Controllers\User\ReferralController         as UserReferralController;
+use App\Controllers\User\LevelController            as UserLevelController;
+use App\Controllers\User\BugReportController        as UserBugReportController;
+use App\Controllers\User\BannerRequestController    as UserBannerRequestController;
 use App\Controllers\User\AdvertiserController;
 use App\Controllers\User\ApiTokenController;
 use App\Controllers\User\CouponController;
 use App\Controllers\SearchController;
+use App\Controllers\User\CustomTaskAdController;
+use App\Controllers\User\SocialTaskController;
+use App\Controllers\Api\SocialTaskApiController;
 
 $auth  = [AuthMiddleware::class];
 $authF = [AuthMiddleware::class, AdvancedFraudMiddleware::class];
@@ -84,26 +86,6 @@ $r->get('/social-accounts/{id}/edit',    [SocialAccountController::class, 'showE
 $r->post('/social-accounts/{id}/update', [SocialAccountController::class, 'update'],     $auth);
 $r->post('/social-accounts/{id}/delete', [SocialAccountController::class, 'delete'],     $auth);
 
-// ── تسک‌ها — تبلیغ‌دهنده ──────────────────────────────────────────────────
-$r->get('/ad-tasks',                       [AdTaskController::class, 'myTasks'],          $auth);
-$r->get('/ad-tasks/create',                [AdTaskController::class, 'showCreate'],       $auth);
-$r->post('/ad-tasks/store',                [AdTaskController::class, 'store'],            $auth);
-$r->get('/ad-tasks/{id}',                  [AdTaskController::class, 'show'],             $auth);
-$r->post('/ad-tasks/{id}/pause',           [AdTaskController::class, 'pause'],            $auth);
-$r->post('/ad-tasks/{id}/resume',          [AdTaskController::class, 'resume'],           $auth);
-$r->post('/ad-tasks/{id}/cancel',          [AdTaskController::class, 'cancel'],           $auth);
-$r->get('/ad-tasks/review/{id}',           [AdTaskController::class, 'showReview'],       $auth);
-$r->post('/ad-tasks/review/{id}/approve',  [AdTaskController::class, 'approveExecution'], $auth);
-$r->post('/ad-tasks/review/{id}/reject',   [AdTaskController::class, 'rejectExecution'],  $auth);
-
-// ── تسک‌ها — انجام‌دهنده ──────────────────────────────────────────────────
-$r->get('/tasks',              [TaskController::class, 'index'],       $authF);
-$r->get('/tasks/history',      [TaskController::class, 'history'],     $auth);
-$r->post('/tasks/start',       [TaskController::class, 'start'],       $authF);
-$r->get('/tasks/{id}/execute', [TaskController::class, 'showExecute'], $authF);
-$r->post('/tasks/{id}/submit', [TaskController::class, 'submit'],      $authF);
-$r->post('/tasks/{id}/dispute',[TaskController::class, 'dispute'],     $auth);
-
 // ── تسک‌های SEO ───────────────────────────────────────────────────────────
 $r->get('/seo-tasks',                [SEOTaskController::class, 'index'],       $auth);
 $r->get('/seo-tasks/history',        [SEOTaskController::class, 'history'],     $auth);
@@ -111,17 +93,30 @@ $r->post('/seo-tasks/start',         [SEOTaskController::class, 'start'],       
 $r->get('/seo-tasks/{id}/execute',   [SEOTaskController::class, 'showExecute'], $auth);
 $r->post('/seo-tasks/{id}/complete', [SEOTaskController::class, 'complete'],    $auth);
 
-// ── وظایف سفارشی ──────────────────────────────────────────────────────────
-$r->get('/custom-tasks',                        [CustomTaskController::class, 'index'],         $auth);
-$r->get('/custom-tasks/available',              [CustomTaskController::class, 'available'],      $auth);
-$r->get('/custom-tasks/create',                 [CustomTaskController::class, 'create'],         $auth);
-$r->post('/custom-tasks/store',                 [CustomTaskController::class, 'store'],          $auth);
-$r->get('/custom-tasks/my-submissions',         [CustomTaskController::class, 'mySubmissions'],  $auth);
-$r->get('/custom-tasks/{id}',                   [CustomTaskController::class, 'show'],           $auth);
-$r->post('/custom-tasks/start',                 [CustomTaskController::class, 'start'],          $auth);
-$r->post('/custom-tasks/{id}/submit-proof',     [CustomTaskController::class, 'submitProof'],    $auth);
-$r->post('/custom-tasks/review',                [CustomTaskController::class, 'review'],         $auth);
-$r->post('/custom-tasks/dispute',               [CustomTaskController::class, 'dispute'],        $auth);
+// لیست وظایف تبلیغ‌دهنده (My Ads)
+$r->get('/custom-tasks', [CustomTaskController::class, 'index'], $auth);
+
+// لیست وظایف موجود برای انجام (Worker)
+$r->get('/custom-tasks/available', [CustomTaskController::class, 'available'], $auth);
+
+// تاریخچه انجام‌های من
+$r->get('/custom-tasks/my-submissions', [CustomTaskController::class, 'mySubmissions'], $auth);
+
+// ایجاد وظیفه جدید
+$r->get('/custom-tasks/create', [CustomTaskController::class, 'create'], $auth);
+$r->post('/custom-tasks/store', [CustomTaskController::class, 'store'], $auth);
+
+// جزئیات وظیفه و submission ها
+$r->get('/custom-tasks/{id}', [CustomTaskController::class, 'show'], $auth);
+
+// شروع انجام تسک (Ajax)
+$r->post('/custom-tasks/start', [CustomTaskController::class, 'start'], $auth);
+
+// ارسال مدرک (Ajax)
+$r->post('/custom-tasks/{id}/submit-proof', [CustomTaskController::class, 'submitProof'], $auth);
+
+// تایید/رد توسط تبلیغ‌دهنده (Ajax)
+$r->post('/custom-tasks/review', [CustomTaskController::class, 'review'], $auth);
 
 // ── تبلیغات استوری ────────────────────────────────────────────────────────
 $r->get('/stories/influencers',         [StoryController::class, 'influencers'],  $auth);
@@ -168,15 +163,6 @@ $r->post('/bug-reports/store',            [UserBugReportController::class, 'stor
 $r->get('/bug-reports/{id}',              [UserBugReportController::class, 'show'],       $auth);
 $r->post('/bug-reports/{id}/comment',     [UserBugReportController::class, 'addComment'], $auth);
 
-// ── پنل تبلیغ‌دهنده ───────────────────────────────────────────────────────
-$r->get('/advertiser',                       [AdvertiserController::class, 'index'],     $auth);
-$r->get('/advertiser/campaigns',             [AdvertiserController::class, 'campaigns'], $auth);
-$r->get('/advertiser/analytics',             [AdvertiserController::class, 'analytics'], $auth);
-$r->get('/advertiser/reviews',               [AdvertiserController::class, 'reviews'],   $auth);
-$r->post('/advertiser/reviews/{id}/approve', [AdvertiserController::class, 'approve'],   $auth);
-$r->post('/advertiser/reviews/{id}/reject',  [AdvertiserController::class, 'reject'],    $auth);
-$r->get('/advertiser/chart-data',            [AdvertiserController::class, 'chartData'], $auth);
-
 // ── توکن‌های API کاربر ────────────────────────────────────────────────────
 $r->get('/api-tokens',              [ApiTokenController::class, 'index'],  $auth);
 $r->post('/api-tokens/create',      [ApiTokenController::class, 'create'], $auth);
@@ -186,6 +172,81 @@ $r->post('/api-tokens/{id}/revoke', [ApiTokenController::class, 'revoke'], $auth
 $r->post('/coupons/validate', [CouponController::class, 'validate'], $auth);
 $r->get('/coupons/history',   [CouponController::class, 'history'],  $auth);
 
+/*
+|--------------------------------------------------------------------------
+| Social Tasks — Executor
+|--------------------------------------------------------------------------
+*/
+$r->get('/social-tasks',                [SocialTaskController::class, 'index'],              $auth);
+$r->get('/social-tasks/dashboard',      [SocialTaskController::class, 'executorDashboard'],  $auth);
+$r->get('/social-tasks/history',        [SocialTaskController::class, 'history'],            $auth);
+$r->post('/social-tasks/start',         [SocialTaskController::class, 'start'],              $auth);
+$r->get('/social-tasks/{id}/execute',   [SocialTaskController::class, 'showExecute'],        $auth);
+$r->post('/social-tasks/{id}/submit',   [SocialTaskController::class, 'submit'],             $auth);
+
+/*
+|--------------------------------------------------------------------------
+| Social Ads — Advertiser
+|--------------------------------------------------------------------------
+*/
+$r->get('/social-ads',                          [SocialTaskController::class, 'myAds'],              $auth);
+$r->get('/social-ads/dashboard',                [SocialTaskController::class, 'advertiserDashboard'], $auth);
+$r->get('/social-ads/create',                   [SocialTaskController::class, 'create'],             $auth);
+$r->post('/social-ads/store',                   [SocialTaskController::class, 'store'],              $auth);
+$r->get('/social-ads/{id}',                     [SocialTaskController::class, 'show'],               $auth);
+$r->post('/social-ads/{id}/pause',              [SocialTaskController::class, 'pause'],              $auth);
+$r->post('/social-ads/{id}/resume',             [SocialTaskController::class, 'resume'],             $auth);
+$r->post('/social-ads/{id}/cancel',             [SocialTaskController::class, 'cancel'],             $auth);
+$r->get('/social-ads/execution/{id}',           [SocialTaskController::class, 'executionDetail'],    $auth);
+$r->post('/social-ads/execution/{id}/approve',  [SocialTaskController::class, 'approveExecution'],   $auth);
+$r->post('/social-ads/execution/{id}/reject',   [SocialTaskController::class, 'rejectExecution'],    $auth);
+
+/*
+|--------------------------------------------------------------------------
+| Social Tasks — API (موبایل)
+|--------------------------------------------------------------------------
+*/
+$r->post('/api/social-tasks/behavior',        [SocialTaskApiController::class, 'recordBehavior'], $auth);
+$r->post('/api/social-tasks/camera-verify',   [SocialTaskApiController::class, 'cameraVerify'],   $auth);
+$r->get('/api/social-tasks/trust-status',     [SocialTaskApiController::class, 'trustStatus'],    $auth);
+
 // ── جستجو ─────────────────────────────────────────────────────────────────
 $r->get('/search',      [SearchController::class, 'fullResults'], $auth);
 $r->get('/search/ajax', [SearchController::class, 'userSearch'],  $auth);
+
+// لیست درخواست‌های بنر کاربر
+$r->get('/banner-request',    [BannerRequestController::class, 'index'], $auth);
+$r->get('/banner-request/create', [BannerRequestController::class, 'create'], $auth);
+$r->post('/banner-request/store',  [BannerRequestController::class, 'store'], $auth);
+$r->get('/banner-request/{id}',    [BannerRequestController::class, 'show'], $auth);
+
+/*
+|--------------------------------------------------------------------------
+| Custom Tasks - Advertiser
+|--------------------------------------------------------------------------
+*/
+$router->get('/custom-tasks/ad', [CustomTaskAdController::class, 'index']);
+$router->get('/custom-tasks/ad/create', [CustomTaskAdController::class, 'create']);
+$router->post('/custom-tasks/ad', [CustomTaskAdController::class, 'store']);
+$router->get('/custom-tasks/ad/{id}', [CustomTaskAdController::class, 'show']);
+
+$router->post('/custom-tasks/ad/{id}/publish', [CustomTaskAdController::class, 'publish']);
+$router->post('/custom-tasks/ad/{id}/pause', [CustomTaskAdController::class, 'pause']);
+$router->post('/custom-tasks/ad/{id}/cancel', [CustomTaskAdController::class, 'cancel']);
+
+$router->post('/custom-tasks/ad/submissions/{id}/approve', [CustomTaskAdController::class, 'approveSubmission']);
+$router->post('/custom-tasks/ad/submissions/{id}/reject', [CustomTaskAdController::class, 'rejectSubmission']);
+
+/*
+|--------------------------------------------------------------------------
+| Custom Tasks - Executor
+|--------------------------------------------------------------------------
+*/
+$router->get('/custom-tasks', [CustomTaskController::class, 'available']); // لیست تسک‌های قابل انجام
+$router->get('/custom-tasks/{id}', [CustomTaskController::class, 'show']); // جزئیات تسک
+$router->post('/custom-tasks/{id}/start', [CustomTaskController::class, 'start']);
+$router->post('/custom-tasks/submissions/{id}/submit', [CustomTaskController::class, 'submitProof']);
+
+$router->get('/custom-tasks/my-submissions', [CustomTaskController::class, 'mySubmissions']);
+$router->get('/custom-tasks/disputes', [CustomTaskController::class, 'disputes']);
+$router->post('/custom-tasks/submissions/{id}/dispute', [CustomTaskController::class, 'storeDispute']);

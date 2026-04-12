@@ -30,4 +30,9 @@ if (file_exists(BASE_PATH . '/helpers/label_helpers.php')) {
 // Application
 $app = \Core\Application::getInstance();
 
+// ─── Sentry Monitoring Bootstrap ────────────────────────────────
+if (file_exists(BASE_PATH . '/app/Services/Sentry/bootstrap.php')) {
+    require_once BASE_PATH . '/app/Services/Sentry/bootstrap.php';
+}
+
 return $app;

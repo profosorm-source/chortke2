@@ -9,17 +9,24 @@ use App\Middleware\AdminMiddleware;
 
 // ── User Controllers ──────────────────────────────────────────────────────
 use App\Controllers\User\PredictionController;
-use App\Controllers\User\AdsocialController;
 use App\Controllers\User\AdtubeController;
 use App\Controllers\User\InfluencerController;
 use App\Controllers\User\OnlineStoreController;
+use App\Controllers\User\VitrineController;
 use App\Controllers\User\SeoAdController;
-use App\Controllers\User\StartupBannerController;
 use App\Controllers\User\UserBannerController;
+
+use App\Controllers\User\ManualDepositController;
+use App\Controllers\User\CryptoDepositController;
+use App\Controllers\User\WithdrawalController;
+use App\Controllers\User\BankCardController as UserBankCardController;
+use App\Controllers\User\AdTaskController   as UserAdTaskController;
+use App\Controllers\User\LotteryController  as UserLotteryController;
 
 // ── Admin Controllers ─────────────────────────────────────────────────────
 use App\Controllers\Admin\PredictionController   as AdminPredictionController;
 use App\Controllers\Admin\OnlineStoreController  as AdminOnlineStoreController;
+use App\Controllers\Admin\VitrineController      as AdminVitrineController;
 use App\Controllers\Admin\SeoAdController        as AdminSeoAdController;
 use App\Controllers\Admin\StartupBannerController as AdminStartupBannerController;
 use App\Controllers\Admin\LogController          as AdminLogController;
@@ -40,24 +47,12 @@ $r->get('/prediction/my-bets',    [PredictionController::class, 'myBets'],   $au
 $r->get('/prediction/{id}',       [PredictionController::class, 'show'],     $auth);
 $r->post('/prediction/place-bet', [PredictionController::class, 'placeBet'], $auth);
 
-// ── تبلیغات شبکه اجتماعی (AdsocialController) ───────────────────────────────
-// انجام‌دهنده
-$r->get('/adsocial',                           [AdsocialController::class, 'income'],           $auth);
-$r->get('/adsocial/history',                   [AdsocialController::class, 'history'],          $auth);
-$r->post('/adsocial/start',                    [AdsocialController::class, 'start'],            $auth);
-$r->get('/adsocial/{id}/execute',              [AdsocialController::class, 'showExecute'],      $auth);
-$r->post('/adsocial/{id}/submit',              [AdsocialController::class, 'submit'],           $auth);
-// تبلیغ‌دهنده
-$r->get('/adsocial/advertise',                 [AdsocialController::class, 'myAds'],            $auth);
-$r->get('/adsocial/advertise/create',          [AdsocialController::class, 'create'],           $auth);
-$r->post('/adsocial/advertise/store',          [AdsocialController::class, 'store'],            $auth);
-$r->get('/adsocial/advertise/{id}',            [AdsocialController::class, 'show'],             $auth);
-$r->post('/adsocial/advertise/{id}/pause',     [AdsocialController::class, 'pause'],            $auth);
-$r->post('/adsocial/advertise/{id}/resume',    [AdsocialController::class, 'resume'],           $auth);
-$r->post('/adsocial/advertise/{id}/cancel',    [AdsocialController::class, 'cancel'],           $auth);
-$r->get('/adsocial/review/{id}',               [AdsocialController::class, 'showReview'],       $auth);
-$r->post('/adsocial/review/{id}/approve',      [AdsocialController::class, 'approveExecution'], $auth);
-$r->post('/adsocial/review/{id}/reject',       [AdsocialController::class, 'rejectExecution'],  $auth);
+// ── تبلیغات شبکه اجتماعی — Redirect به آدرس‌های جدید ──────────────────────
+// AdsocialController حذف شده — SocialTaskController در routes/user.php
+$r->get('/adsocial',               fn() => redirect(url('/social-tasks')),         $auth);
+$r->get('/adsocial/history',       fn() => redirect(url('/social-tasks/history')), $auth);
+$r->get('/adsocial/advertise',     fn() => redirect(url('/social-ads')),           $auth);
+$r->get('/adsocial/advertise/create', fn() => redirect(url('/social-ads/create')), $auth);
 
 // ── تبلیغات ویدیویی (AdtubeController) ──────────────────────────────────────
 // انجام‌دهنده
@@ -88,16 +83,27 @@ $r->get('/influencer/advertise/create',         [InfluencerController::class, 'c
 $r->post('/influencer/advertise/store',         [InfluencerController::class, 'storeOrder'],     $auth);
 $r->get('/influencer/advertise/my-orders',      [InfluencerController::class, 'myPlacedOrders'], $auth);
 
-// ── فروشگاه آنلاین ───────────────────────────────────────────────────────────
-$r->get('/online-store',                        [OnlineStoreController::class, 'index'],           $auth);
-$r->get('/online-store/sell',                   [OnlineStoreController::class, 'mySales'],         $auth);
-$r->get('/online-store/sell/create',            [OnlineStoreController::class, 'create'],          $auth);
-$r->post('/online-store/sell/store',            [OnlineStoreController::class, 'store'],           $auth);
-$r->get('/online-store/my-purchases',           [OnlineStoreController::class, 'myPurchases'],     $auth);
-$r->get('/online-store/{id}',                   [OnlineStoreController::class, 'show'],            $auth);
-$r->post('/online-store/{id}/buy',              [OnlineStoreController::class, 'buy'],             $auth);
-$r->post('/online-store/{id}/confirm-received', [OnlineStoreController::class, 'confirmReceived'], $auth);
-$r->post('/online-store/{id}/dispute',          [OnlineStoreController::class, 'dispute'],         $auth);
+// ── ویترین (جایگزین Online Store) ────────────────────────────────────────────
+$r->get('/vitrine',                        [VitrineController::class, 'index'],          $auth);
+$r->get('/vitrine/wanted',                 [VitrineController::class, 'wantedIndex'],    $auth);
+$r->get('/vitrine/wanted/create',          [VitrineController::class, 'createWanted'],   $auth);
+$r->get('/vitrine/sell/create',            [VitrineController::class, 'create'],         $auth);
+$r->get('/vitrine/my-listings',            [VitrineController::class, 'myListings'],     $auth);
+$r->get('/vitrine/my-purchases',           [VitrineController::class, 'myPurchases'],    $auth);
+$r->get('/vitrine/my-requests',            [VitrineController::class, 'myRequests'],     $auth);
+$r->post('/vitrine/store',                 [VitrineController::class, 'store'],          $auth);
+$r->post('/vitrine/request/{rid}/accept',  [VitrineController::class, 'acceptRequest'],  $auth);
+$r->post('/vitrine/request/{rid}/reject',  [VitrineController::class, 'rejectRequest'],  $auth);
+$r->get('/vitrine/{id}',                   [VitrineController::class, 'show'],           $auth);
+$r->post('/vitrine/{id}/buy',              [VitrineController::class, 'buy'],            $auth);
+$r->post('/vitrine/{id}/request',          [VitrineController::class, 'sendRequest'],    $auth);
+$r->post('/vitrine/{id}/confirm',          [VitrineController::class, 'confirmDelivery'],$auth);
+$r->post('/vitrine/{id}/dispute',          [VitrineController::class, 'dispute'],        $auth);
+$r->post('/vitrine/{id}/watch',            [VitrineController::class, 'watch'],          $auth);
+// redirect قدیمی → vitrine (backward compat)
+$r->get('/online-store',              [VitrineController::class, 'index'],       $auth);
+$r->get('/online-store/sell',         [VitrineController::class, 'myListings'],  $auth);
+$r->get('/online-store/my-purchases', [VitrineController::class, 'myPurchases'], $auth);
 
 // ── تبلیغ سئو (کاربر) ────────────────────────────────────────────────────────
 $r->get('/seo-ad',               [SeoAdController::class, 'index'],  $auth);
@@ -106,12 +112,6 @@ $r->post('/seo-ad/store',        [SeoAdController::class, 'store'],  $auth);
 $r->get('/seo-ad/{id}',          [SeoAdController::class, 'show'],   $auth);
 $r->post('/seo-ad/{id}/pause',   [SeoAdController::class, 'pause'],  $auth);
 $r->post('/seo-ad/{id}/resume',  [SeoAdController::class, 'resume'], $auth);
-
-// ── بنر راه‌اندازی (کسب‌وکارهای نوپا) ──────────────────────────────────────
-$r->get('/startup-banner',         [StartupBannerController::class, 'index'],  $auth);
-$r->get('/startup-banner/create',  [StartupBannerController::class, 'create'], $auth);
-$r->post('/startup-banner/store',  [StartupBannerController::class, 'store'],  $auth);
-$r->get('/startup-banner/{id}',    [StartupBannerController::class, 'show'],   $auth);
 
 // ── بنرهای سایزی کاربر (جایگاه‌های مختلف) ──────────────────────────────────
 $r->get('/my-banners',               [UserBannerController::class, 'index'],  $auth);
@@ -134,25 +134,24 @@ $r->post('/admin/prediction/{id}/cancel',        [AdminPredictionController::cla
 $r->post('/admin/prediction/{id}/close-betting', [AdminPredictionController::class, 'closeBetting'],$admin);
 
 // ── فروشگاه آنلاین (ادمین) ───────────────────────────────────────────────────
-$r->get('/admin/online-store',                   [AdminOnlineStoreController::class, 'index'],       $admin);
-$r->post('/admin/online-store/{id}/approve',     [AdminOnlineStoreController::class, 'approve'],     $admin);
-$r->post('/admin/online-store/{id}/reject',      [AdminOnlineStoreController::class, 'reject'],      $admin);
-$r->get('/admin/online-store/{id}/dispute',      [AdminOnlineStoreController::class, 'showDispute'], $admin);
-$r->post('/admin/online-store/{id}/resolve',     [AdminOnlineStoreController::class, 'resolve'],     $admin);
-$r->post('/admin/online-store/{id}/release',     [AdminOnlineStoreController::class, 'releaseFunds'],$admin);
-$r->post('/admin/online-store/{id}/refund',      [AdminOnlineStoreController::class, 'refund'],      $admin);
+// ── ادمین ویترین ─────────────────────────────────────────────────────────────
+$r->get('/admin/vitrine',                    [AdminVitrineController::class, 'index'],       $admin);
+$r->get('/admin/vitrine/settings',           [AdminVitrineController::class, 'settings'],    $admin);
+$r->post('/admin/vitrine/settings/save',     [AdminVitrineController::class, 'saveSettings'],$admin);
+$r->post('/admin/vitrine/{id}/approve',      [AdminVitrineController::class, 'approve'],     $admin);
+$r->post('/admin/vitrine/{id}/reject',       [AdminVitrineController::class, 'reject'],      $admin);
+$r->get('/admin/vitrine/{id}/dispute',       [AdminVitrineController::class, 'showDispute'], $admin);
+$r->post('/admin/vitrine/{id}/resolve',      [AdminVitrineController::class, 'resolve'],     $admin);
+$r->post('/admin/vitrine/{id}/release',      [AdminVitrineController::class, 'releaseFunds'],$admin);
+$r->post('/admin/vitrine/{id}/refund',       [AdminVitrineController::class, 'refund'],      $admin);
+// redirect قدیمی → vitrine
+$r->get('/admin/online-store',               [AdminVitrineController::class, 'index'],       $admin);
 
 // ── تبلیغ سئو (ادمین) ────────────────────────────────────────────────────────
 $r->get('/admin/seo-ad',                   [AdminSeoAdController::class, 'index'],   $admin);
 $r->post('/admin/seo-ad/{id}/approve',     [AdminSeoAdController::class, 'approve'], $admin);
 $r->post('/admin/seo-ad/{id}/reject',      [AdminSeoAdController::class, 'reject'],  $admin);
 $r->post('/admin/seo-ad/{id}/pause',       [AdminSeoAdController::class, 'pause'],   $admin);
-
-// ── بنر راه‌اندازی (ادمین) ───────────────────────────────────────────────────
-$r->get('/admin/startup-banners',                  [AdminStartupBannerController::class, 'index'],   $admin);
-$r->post('/admin/startup-banners/{id}/approve',    [AdminStartupBannerController::class, 'approve'], $admin);
-$r->post('/admin/startup-banners/{id}/reject',     [AdminStartupBannerController::class, 'reject'],  $admin);
-$r->post('/admin/startup-banners/{id}/toggle',     [AdminStartupBannerController::class, 'toggle'],  $admin);
 
 // ── لاگ فعالیت‌ها (route گمشده: activityLogs) ────────────────────────────────
 $r->get('/admin/logs/activity', [AdminLogController::class, 'activityLogs'], $admin);
@@ -168,33 +167,11 @@ $r->get('/admin/captcha/settings', function() {
     app()->response->redirect(url('/admin/settings?section=captcha'));
 }, $admin);
 
-// ════════════════════════════════════════════════════════════════════════════
-// ADTASK — تسک‌های سفارشی (مسیر /adtask — مجزا از /ad-tasks و /custom-tasks)
-// ════════════════════════════════════════════════════════════════════════════
-
-use App\Controllers\User\AdTaskController as AdtaskController;
-
-// انجام‌دهنده
-$r->get('/adtask/available',                    [AdtaskController::class, 'available'],    $auth);
-$r->get('/adtask/my-submissions',               [AdtaskController::class, 'mySubmissions'],$auth);
-$r->get('/adtask/{id}',                         [AdtaskController::class, 'show'],         $auth);
-$r->post('/adtask/start',                       [AdtaskController::class, 'start'],        $auth);
-$r->post('/adtask/{id}/submit-proof',           [AdtaskController::class, 'submitProof'],  $auth);
-$r->post('/adtask/dispute',                     [AdtaskController::class, 'dispute'],      $auth);
-// تبلیغ‌دهنده
-$r->get('/adtask/advertise',                    [AdtaskController::class, 'myTasks'],      $auth);
-$r->get('/adtask/advertise/create',             [AdtaskController::class, 'create'],       $auth);
-$r->post('/adtask/advertise/store',             [AdtaskController::class, 'store'],        $auth);
-$r->get('/adtask/advertise/{id}',               [AdtaskController::class, 'showTask'],     $auth);
-$r->post('/adtask/review',                      [AdtaskController::class, 'review'],       $auth);
 
 // ════════════════════════════════════════════════════════════════════════════
 // WALLET SHORTCUTS — مسیرهای کوتاه که view ها مستقیم استفاده می‌کنند
 // ════════════════════════════════════════════════════════════════════════════
 
-use App\Controllers\User\ManualDepositController;
-use App\Controllers\User\CryptoDepositController;
-use App\Controllers\User\WithdrawalController;
 
 // واریز دستی — shortcut
 $r->get('/manual-deposit/create',   [ManualDepositController::class, 'create'], $auth);
@@ -211,7 +188,6 @@ $r->get('/withdrawal/create',       [WithdrawalController::class, 'create'],    
 // BANK CARDS — مسیرهای POST بدون {id} در URL (id از body می‌آید)
 // ════════════════════════════════════════════════════════════════════════════
 
-use App\Controllers\User\BankCardController as UserBankCardController;
 
 $r->post('/bank-cards/delete',      [UserBankCardController::class, 'delete'],     $auth);
 $r->post('/bank-cards/set-default', [UserBankCardController::class, 'setDefault'], $auth);
@@ -219,12 +195,6 @@ $r->post('/bank-cards/set-default', [UserBankCardController::class, 'setDefault'
 // ════════════════════════════════════════════════════════════════════════════
 // DASHBOARD SHORTCUTS — لینک‌های مستقیم داشبورد کاربر
 // ════════════════════════════════════════════════════════════════════════════
-
-use App\Controllers\User\AdTaskController   as UserAdTaskController;
-use App\Controllers\User\LotteryController  as UserLotteryController;
-
-// لینک "کمپین جدید" داشبورد → فرم ساخت adtask
-$r->get('/user/ad-tasks/create', [UserAdTaskController::class, 'create'], $auth);
 
 // vote لاتاری از داشبورد (fetch مستقیم)
 $r->post('/user/lottery/vote',   [UserLotteryController::class, 'vote'],  $auth);

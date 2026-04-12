@@ -18,7 +18,7 @@ use App\Controllers\Admin\CryptoDepositController as AdminCryptoDepositControlle
 use App\Controllers\Admin\WithdrawalController    as AdminWithdrawalController;
 use App\Controllers\Admin\TransactionController   as AdminTransactionController;
 use App\Controllers\Admin\SocialAccountController as AdminSocialAccountController;
-use App\Controllers\Admin\AdTaskController        as AdminAdTaskController;
+use App\Controllers\Admin\CustomTaskController    as AdminCustomTaskController;
 use App\Controllers\Admin\TaskExecutionController as AdminTaskExecutionController;
 use App\Controllers\Admin\TaskDisputeController   as AdminTaskDisputeController;
 use App\Controllers\Admin\TaskRecheckController   as AdminTaskRecheckController;
@@ -26,7 +26,6 @@ use App\Controllers\Admin\SEOKeywordController;
 use App\Controllers\Admin\RoleController          as AdminRoleController;
 use App\Controllers\Admin\ReferralController      as AdminReferralController;
 use App\Controllers\Admin\LevelController         as AdminLevelController;
-use App\Controllers\Admin\CustomTaskController    as AdminCustomTaskController;
 use App\Controllers\Admin\StoryController         as AdminStoryController;
 use App\Controllers\Admin\ContentController       as AdminContentController;
 use App\Controllers\Admin\InvestmentController    as AdminInvestmentController;
@@ -47,6 +46,8 @@ use App\Controllers\SearchController;
 use App\Controllers\User\TicketController         as UserTicketController;
 use App\Controllers\Admin\RiskPolicyController;
 use App\Controllers\Admin\ScoreManagementController;
+use App\Controllers\Admin\SentryAdminController;
+use App\Controllers\Admin\SocialTaskController as AdminSocialTaskController;
 
 $admin = [AuthMiddleware::class, AdminMiddleware::class];
 $r     = app()->router;
@@ -138,11 +139,26 @@ $r->get('/admin/social-accounts/{id}',          [AdminSocialAccountController::c
 $r->post('/admin/social-accounts/{id}/verify',  [AdminSocialAccountController::class, 'verify'], $admin);
 $r->post('/admin/social-accounts/{id}/reject',  [AdminSocialAccountController::class, 'reject'], $admin);
 
-// ── تسک‌ها ──────────────────────────────────────────────────────────────────
-$r->get('/admin/ad-tasks',             [AdminAdTaskController::class, 'index'],   $admin);
-$r->get('/admin/ad-tasks/{id}',        [AdminAdTaskController::class, 'show'],    $admin);
-$r->post('/admin/ad-tasks/{id}/approve',[AdminAdTaskController::class, 'approve'],$admin);
-$r->post('/admin/ad-tasks/{id}/reject', [AdminAdTaskController::class, 'reject'], $admin);
+// ─────────────────────────────────────────────────
+// Admin Routes (routes/admin.php)
+// ─────────────────────────────────────────────────
+
+// لیست همه وظایف
+$r->get('/admin/custom-tasks', [AdminCustomTaskController::class, 'index'], $admin);
+
+// جزئیات وظیفه
+$r->get('/admin/custom-tasks/{id}', [AdminCustomTaskController::class, 'show'], $admin);
+
+// تایید/رد وظیفه (Ajax)
+$r->post('/admin/custom-tasks/approve', [AdminCustomTaskController::class, 'approve'], $admin);
+
+// تایید/رد اجباری submission (Ajax)
+$r->post('/admin/custom-tasks/submissions/force-approve', [AdminCustomTaskController::class, 'forceApproveSubmission'], $admin);
+$r->post('/admin/custom-tasks/submissions/force-reject', [AdminCustomTaskController::class, 'forceRejectSubmission'], $admin);
+
+// آمار و گزارش (Ajax)
+$r->get('/admin/custom-tasks/stats', [AdminCustomTaskController::class, 'stats'], $admin);
+post('/admin/custom-tasks/disputes/resolve',  [AdminCustomTaskController::class, 'resolveDispute'], $admin);
 
 $r->get('/admin/task-executions',                [AdminTaskExecutionController::class, 'index'],   $admin);
 $r->get('/admin/task-executions/{id}',           [AdminTaskExecutionController::class, 'show'],    $admin);
@@ -352,3 +368,54 @@ $r->get('/admin/users/{id}/scores',                 [ScoreManagementController::
 $r->post('/admin/users/{id}/scores/adjust',         [ScoreManagementController::class, 'adjustScore'], $admin);
 $r->post('/admin/scores/adjustments/{id}/revoke',   [ScoreManagementController::class, 'revokeAdjustment'], $admin);
 $r->get('/admin/users/{id}/scores/history',         [ScoreManagementController::class, 'history'], $admin);
+
+// ── مانیتورینگ سیستم (Sentry) ────────────────────────────────────────
+$r->get('/admin/sentry',                              [SentryAdminController::class, 'index'],            $admin);
+$r->get('/admin/sentry/issues',                       [SentryAdminController::class, 'issues'],           $admin);
+$r->get('/admin/sentry/issues/{id}',                  [SentryAdminController::class, 'issueDetails'],     $admin);
+$r->get('/admin/sentry/performance',                  [SentryAdminController::class, 'performance'],      $admin);
+$r->get('/admin/sentry/analytics',                    [SentryAdminController::class, 'analytics'],        $admin);
+$r->get('/admin/sentry/alerts',                       [SentryAdminController::class, 'alerts'],           $admin);
+$r->get('/admin/sentry/audit',                        [SentryAdminController::class, 'auditTrail'],       $admin);
+
+// Sentry API endpoints
+$r->post('/admin/sentry/issues/{id}/resolve',         [SentryAdminController::class, 'resolveIssue'],     $admin);
+$r->post('/admin/sentry/issues/{id}/mute',            [SentryAdminController::class, 'muteIssue'],        $admin);
+$r->post('/admin/sentry/alerts/{id}/acknowledge',     [SentryAdminController::class, 'acknowledgeAlert'], $admin);
+$r->get('/admin/sentry/api/chart-data',               [SentryAdminController::class, 'getChartData'],     $admin);
+$r->get('/admin/sentry/api/health',                   [SentryAdminController::class, 'healthCheck'],      $admin);
+$r->post('/admin/sentry/audit/export',                [SentryAdminController::class, 'exportAudit'],      $admin);
+$r->post('/admin/sentry/audit/report',                [SentryAdminController::class, 'generateReport'],   $admin);
+
+
+/*
+|--------------------------------------------------------------------------
+| Social Tasks — Admin Panel
+|--------------------------------------------------------------------------
+*/
+// آگهی‌ها
+$r->get('/admin/social-tasks',                          [AdminSocialTaskController::class, 'index'],          $admin);
+$r->get('/admin/social-tasks/stats',                    [AdminSocialTaskController::class, 'stats'],          $admin);
+$r->get('/admin/social-tasks/{id}',                     [AdminSocialTaskController::class, 'show'],           $admin);
+$r->post('/admin/social-tasks/{id}/approve',            [AdminSocialTaskController::class, 'approve'],        $admin);
+$r->post('/admin/social-tasks/{id}/reject',             [AdminSocialTaskController::class, 'reject'],         $admin);
+$r->post('/admin/social-tasks/{id}/pause',              [AdminSocialTaskController::class, 'pause'],          $admin);
+$r->post('/admin/social-tasks/{id}/resume',             [AdminSocialTaskController::class, 'resume'],         $admin);
+$r->post('/admin/social-tasks/{id}/cancel',             [AdminSocialTaskController::class, 'cancel'],         $admin);
+
+// اجراها
+$r->get('/admin/social-executions',                     [AdminSocialTaskController::class, 'executions'],     $admin);
+$r->get('/admin/social-executions/{id}',                [AdminSocialTaskController::class, 'executionShow'],  $admin);
+$r->post('/admin/social-executions/{id}/flag',          [AdminSocialTaskController::class, 'flagExecution'],  $admin);
+$r->post('/admin/social-executions/{id}/override',      [AdminSocialTaskController::class, 'overrideDecision'],$admin);
+
+// Trust
+$r->get('/admin/social-trust',                          [AdminSocialTaskController::class, 'trustDashboard'], $admin);
+$r->get('/admin/social-trust/user/{id}',                [AdminSocialTaskController::class, 'userTrust'],      $admin);
+$r->post('/admin/social-trust/user/{id}/adjust',        [AdminSocialTaskController::class, 'adjustTrust'],    $admin);
+
+$router->get('/admin/custom-tasks', [CustomTaskController::class, 'index']);
+$router->get('/admin/custom-tasks/{id}', [CustomTaskController::class, 'show']);
+
+$router->get('/admin/custom-tasks/disputes', [CustomTaskController::class, 'disputes']);
+$router->post('/admin/custom-tasks/disputes/{id}/resolve', [CustomTaskController::class, 'resolveDispute']);
