@@ -4,12 +4,14 @@ use Core\Container;
 use Core\Application;
 use Core\Session;
 use Core\Database;
+use Core\Logger;
 use App\Models\User;
 use App\Services\AuthService;
 use App\Services\CaptchaService;
 use App\Models\SystemSetting;
 use App\Models\ActivityLog;
 use App\Models\TwoFactorCode;
+use App\Services\AuditTrail;
 use App\Services\WalletService;
 use App\Services\NotificationService;
 use App\Services\UploadService;
@@ -36,13 +38,15 @@ use App\Services\CustomTaskService;
 use App\Services\SEOTaskService;
 use App\Services\UserDashboardService;
 use App\Models\TaskExecution;
-use App\Models\Advertisement;
 use App\Models\Transaction;
 use App\Models\ReferralCommission;
 use App\Models\Notification;
 use App\Models\SocialAccount;
 use App\Models\Investment;
 use App\Models\LotteryRound;
+use App\Models\CustomTaskDispute;
+use App\Models\CustomTask;
+use App\Models\CustomTaskSubmission;
 
 
 // BASE_PATH
@@ -59,6 +63,12 @@ require_once BASE_PATH . '/core/Autoloader.php';
 
 // Container Singleton
 $container = Container::getInstance();
+
+// ─── Logger — Singleton مرکزی لاگ ────────────────────────────────────────────
+$container->singleton(Logger::class, function() {
+    return new Logger('app');
+});
+
 
 // ثبت سرویس‌ها و مدل‌ها
 $container->singleton(Session::class, function() {
@@ -85,6 +95,7 @@ $container->singleton(AuthService::class, function($c) {
     );
 });
 
+
 $container->singleton(CaptchaService::class, function($c) {
     return new CaptchaService(
         $c->make(Database::class),
@@ -110,14 +121,24 @@ $container->singleton(\App\Models\Setting::class, function($c) {
 
 
 // ─── Singletons: Simple Services ─────────────────────────────────────────
-$container->singleton(WalletService::class, fn() => new WalletService());
+$container->singleton(WalletService::class, function($c) {
+    return new WalletService(
+        $c->make(Database::class),
+        $c->make(\App\Models\Wallet::class),
+        $c->make(\App\Models\Transaction::class),
+        $c->make(\Core\IdempotencyKey::class),
+        new AuditTrail(),
+        $c->make(Logger::class)->withChannel('wallet')
+    );
+});
 
 $container->singleton(\App\Services\EmailService::class, function($c) {
     return new \App\Services\EmailService(
         $c->make(\App\Models\EmailQueue::class),
         $c->make(\App\Models\NotificationPreference::class),
         $c->make(\App\Models\Setting::class),
-        $c->make(\App\Models\User::class)
+        $c->make(\App\Models\User::class),
+        $c->make(Logger::class)->withChannel('email')
     );
 });
 
@@ -125,7 +146,8 @@ $container->singleton(NotificationService::class, function($c) {
     return new NotificationService(
         $c->make(\App\Models\Notification::class),
         $c->make(\App\Models\NotificationPreference::class),
-        $c->make(Database::class)
+        $c->make(Database::class),
+        $c->make(Logger::class)->withChannel('notification')
     );
 });
 $container->singleton(UploadService::class, fn() => new UploadService());
@@ -145,6 +167,55 @@ $container->singleton(UserLevelService::class, function($c) {
     );
 });
 
+
+// Models
+$container->singleton(App\Models\CustomTask::class, function($c) {
+    return new App\Models\CustomTask($c->make(Database::class));
+});
+
+$container->singleton(App\Models\CustomTaskSubmission::class, function($c) {
+    return new App\Models\CustomTaskSubmission($c->make(Database::class));
+});
+
+$container->singleton(App\Models\CustomTaskDispute::class, function($c) {
+    return new App\Models\CustomTaskDispute($c->make(Database::class));
+});
+
+// Service - با استفاده از Anti-Fraud موجود
+$container->singleton(App\Services\CustomTaskService::class, function($c) {
+    return new App\Services\CustomTaskService(
+        $c->make(Database::class),
+        $c->make(App\Services\WalletService::class),
+        $c->make(App\Services\UserLevelService::class),
+        $c->make(App\Services\ReferralCommissionService::class),
+        $c->make(App\Models\CustomTask::class),
+        $c->make(App\Models\CustomTaskSubmission::class),
+        $c->make(App\Models\CustomTaskDispute::class),
+        $c->make(App\Services\AntiFraud\BrowserFingerprintService::class),
+        $c->make(App\Services\AntiFraud\IPQualityService::class),
+        $c->make(App\Services\AntiFraud\SessionAnomalyService::class)
+    );
+});
+
+// Controllers
+$container->singleton(App\Controllers\User\CustomTaskController::class, function($c) {
+    return new App\Controllers\User\CustomTaskController(
+        $c->make(App\Models\CustomTask::class),
+        $c->make(App\Models\CustomTaskSubmission::class),
+        $c->make(App\Services\CustomTaskService::class),
+        $c->make(App\Services\UploadService::class)
+    );
+});
+
+$container->singleton(App\Controllers\Admin\CustomTaskController::class, function($c) {
+    return new App\Controllers\Admin\CustomTaskController(
+        $c->make(App\Services\CustomTaskService::class),
+        $c->make(App\Services\WalletService::class),
+        $c->make(App\Models\CustomTask::class),
+        $c->make(App\Models\CustomTaskSubmission::class)
+    );
+});
+
 $container->singleton(ContentService::class, function($c) {
     return new ContentService(
         $c->make(WalletService::class),
@@ -154,8 +225,14 @@ $container->singleton(ContentService::class, function($c) {
 
 $container->singleton(InvestmentService::class, function($c) {
     return new InvestmentService(
+        $c->make(Database::class),
         $c->make(WalletService::class),
-        $c->make(NotificationService::class)
+        $c->make(NotificationService::class),
+        $c->make(\App\Models\Investment::class),
+        $c->make(\App\Models\TradingRecord::class),
+        $c->make(\App\Models\InvestmentProfit::class),
+        $c->make(\App\Models\InvestmentWithdrawal::class),
+        new AuditTrail()
     );
 });
 
@@ -168,8 +245,14 @@ $container->singleton(LotteryService::class, function($c) {
 
 $container->singleton(ManualDepositService::class, function($c) {
     return new ManualDepositService(
+        $c->make(Database::class),
         $c->make(WalletService::class),
-        $c->make(NotificationService::class)
+        $c->make(NotificationService::class),
+        $c->make(\App\Models\ManualDeposit::class),
+        $c->make(\App\Models\BankCard::class),
+        $c->make(\App\Models\User::class),
+        new AuditTrail(),
+        $c->make(Logger::class)->withChannel('manual_deposit')
     );
 });
 
@@ -181,7 +264,14 @@ $container->singleton(CryptoDepositService::class, function($c) {
 });
 
 $container->singleton(CryptoVerificationService::class, function($c) {
-    return new CryptoVerificationService($c->make(WalletService::class));
+    return new CryptoVerificationService(
+        $c->make(Database::class),
+        $c->make(Logger::class)->withChannel('crypto'),
+        $c->make(\App\Models\Setting::class),
+        $c->make(\App\Models\CryptoDeposit::class),
+        $c->make(WalletService::class),
+        $c->make(NotificationService::class)
+    );
 });
 
 $container->singleton(PaymentService::class, function($c) {
@@ -195,7 +285,9 @@ $container->singleton(WithdrawalService::class, function($c) {
     return new WithdrawalService(
         $c->make(WalletService::class),
         $c->make(NotificationService::class),
-        $c->make(WithdrawalLimitService::class)
+        $c->make(WithdrawalLimitService::class),
+        new AuditTrail(),
+        $c->make(Logger::class)->withChannel('withdrawal')
     );
 });
 
@@ -226,7 +318,14 @@ $container->singleton(StoryPromotionService::class, function($c) {
 });
 
 $container->singleton(KYCService::class, function($c) {
-    return new KYCService($c->make(UploadService::class));
+    return new KYCService(
+        $c->make(\App\Models\KYCVerification::class),
+        $c->make(\App\Models\User::class),
+        $c->make(Database::class),
+        $c->make(UploadService::class),
+        new AuditTrail(),
+        $c->make(NotificationService::class)
+    );
 });
 
 $container->singleton(BannerService::class, function($c) {
@@ -241,13 +340,6 @@ $container->singleton(TwoFactorService::class, function($c) {
     );
 });
 
-$container->singleton(CustomTaskService::class, function($c) {
-    return new CustomTaskService(
-        $c->make(WalletService::class),
-        $c->make(UserLevelService::class),
-        $c->make(ReferralCommissionService::class)
-    );
-});
 
 $container->singleton(SEOTaskService::class, function($c) {
     return new SEOTaskService($c->make(WalletService::class));
@@ -316,13 +408,6 @@ $container->singleton(App\Models\CryptoDepositIntent::class, function($c) {
     return new App\Models\CryptoDepositIntent($c->make(Database::class));
 });
 
-$container->singleton(App\Models\CustomTask::class, function($c) {
-    return new App\Models\CustomTask($c->make(Database::class));
-});
-
-$container->singleton(App\Models\CustomTaskSubmission::class, function($c) {
-    return new App\Models\CustomTaskSubmission($c->make(Database::class));
-});
 
 $container->singleton(App\Models\EmailQueue::class, function($c) {
     return new App\Models\EmailQueue($c->make(Database::class));
@@ -537,6 +622,78 @@ $container->singleton(\App\Services\FeatureFlagService::class, function($c) {
 // ─── Core Services ────────────────────────────────────────────────────────
 $container->singleton(\Core\RateLimiter::class, function($c) {
     return new \Core\RateLimiter();
+});
+
+
+
+// ─── AdminDashboardService ────────────────────────────────────────────────────
+$container->singleton(\App\Services\AdminDashboardService::class, function($c) {
+    return new \App\Services\AdminDashboardService(
+        $c->make(Database::class),
+        $c->make(Logger::class)->withChannel('admin')
+    );
+});
+
+// ─── VitrineService ───────────────────────────────────────────────────────────
+$container->singleton(\App\Services\VitrineService::class, function($c) {
+    return new \App\Services\VitrineService(
+        $c->make(\App\Models\VitrineListing::class),
+        $c->make(\App\Models\VitrineRequest::class),
+        $c->make(WalletService::class),
+        $c->make(NotificationService::class),
+        $c->make(\App\Services\FeatureFlagService::class),
+        $c->make(Database::class),
+        $c->make(Logger::class)->withChannel('vitrine')
+    );
+});
+
+// ─── SocialTask Module ────────────────────────────────────────────────────
+$container->singleton(\App\Services\SocialTask\TrustScoreService::class, function($c) {
+    return new \App\Services\SocialTask\TrustScoreService(
+        $c->make(\Core\Database::class),
+        $c->make(\App\Services\UserScoreService::class)
+    );
+});
+
+$container->singleton(\App\Services\SocialTask\SocialTaskScoringService::class, function($c) {
+    return new \App\Services\SocialTask\SocialTaskScoringService();
+});
+
+$container->singleton(\App\Services\SocialTask\SilentAntiFraudService::class, function($c) {
+    return new \App\Services\SocialTask\SilentAntiFraudService(
+        $c->make(\Core\Database::class),
+        $c->make(\App\Services\AntiFraud\IPQualityService::class),
+        $c->make(\App\Services\AntiFraud\BrowserFingerprintService::class),
+        $c->make(\App\Services\AntiFraud\SessionAnomalyService::class),
+        $c->make(\App\Services\SocialTask\TrustScoreService::class),
+        $c->make(\App\Services\SocialTask\SocialTaskScoringService::class),
+        $c->make(\App\Services\AuditTrail::class),
+        $c->make(\App\Services\NotificationService::class)
+    );
+});
+
+$container->singleton(\App\Services\SocialTask\SocialTaskService::class, function($c) {
+    return new \App\Services\SocialTask\SocialTaskService(
+        $c->make(\Core\Database::class),
+        $c->make(\App\Services\SocialTask\SocialTaskScoringService::class),
+        $c->make(\App\Services\SocialTask\TrustScoreService::class),
+        $c->make(\App\Services\SocialTask\SilentAntiFraudService::class),
+        $c->make(\App\Services\WalletService::class),
+        $c->make(\App\Services\NotificationService::class),
+        $c->make(\App\Services\ApiRateLimiter::class),
+        $c->make(\Core\Logger::class)
+    );
+});
+ 
+// ─── Admin SocialTask Controller ─────────────────────────────────────────
+$container->singleton(\App\Controllers\Admin\SocialTaskController::class, function($c) {
+    return new \App\Controllers\Admin\SocialTaskController(
+        $c->make(\App\Services\SocialTask\SocialTaskService::class),
+        $c->make(\App\Services\SocialTask\TrustScoreService::class),
+        $c->make(\App\Services\SocialTask\SilentAntiFraudService::class),
+        $c->make(\App\Services\WalletService::class),
+        $c->make(\Core\Database::class)
+    );
 });
 
 // Application — باید آخرین خط باشد
